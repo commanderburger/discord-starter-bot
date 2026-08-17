@@ -119,9 +119,11 @@ class ApiAdmin(commands.Cog):
         timeout = aiohttp.ClientTimeout(total=10)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(url, headers=headers) as response:
-                body = await response.content.read(MAX_RESPONSE_BYTES + 1)
-                if len(body) > MAX_RESPONSE_BYTES:
-                    raise ValueError("The API response is larger than 1 MB.")
+                body = bytearray()
+                async for chunk in response.content.iter_chunked(64 * 1024):
+                    body.extend(chunk)
+                    if len(body) > MAX_RESPONSE_BYTES:
+                        raise ValueError("The API response is larger than 1 MB.")
                 try:
                     payload = json.loads(body.decode("utf-8")) if body else {}
                 except (UnicodeDecodeError, json.JSONDecodeError):
