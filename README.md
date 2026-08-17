@@ -1,16 +1,26 @@
 # Discord Starter Bot
 
-A small Python bot with `/ping`, `/hello`, and `/about` slash commands. Commands live in `cogs/`, so adding features later does not require turning the main file into one large script.
+A modular Python Discord bot with moderation, Minecraft status, spawner economy estimates, utility commands, and a help menu. Commands live in `cogs/`, so adding features later does not require turning the main file into one large script.
+
+## Included features
+
+- Removes Discord invite links outside `partners`, `announcements`, and `our-ad` (configurable).
+- `/stats` checks a Java or Bedrock Minecraft server directly. No API key is needed.
+- `/links` displays the server address and optional website/store/vote/Discord links.
+- `/ordering` lists live Density order prices and quantities after an API sync.
+- `/calc` uses DonutSpawners rates, stacking efficiency, and the live Density order book.
+- `/spawner count` lists live server-wide stacked totals and placed blocks by type.
+- `/help`, `/serverinfo`, `/userinfo`, `/avatar`, `/coinflip`, and `/roll`.
+- Private `/api` controls for the server owner and `Owner`/`Manager` roles.
 
 ## 1. Create the Discord application
 
 1. Open the [Discord Developer Portal](https://discord.com/developers/applications), choose **New Application**, and give it a name.
 2. Open **Bot**, choose **Reset Token**, and copy the token somewhere private. Do not paste it into source code or commit it to Git.
-3. Under **Installation**, enable **Guild Install**. Add the `applications.commands` and `bot` scopes. For this starter, the bot only needs **Send Messages** and **Embed Links** permissions.
-4. Copy the install link, open it, and add the bot to a server you manage.
-5. Optional but useful: in Discord, enable Developer Mode under **User Settings > Advanced**, right-click your server, and choose **Copy Server ID**. Use this as `TEST_GUILD_ID` while developing.
-
-The bot uses slash commands, so **Message Content Intent is not required**.
+3. Under **Installation**, enable **Guild Install**. Add the `applications.commands` and `bot` scopes. Give the bot **View Channels**, **Send Messages**, **Embed Links**, **Read Message History**, and **Manage Messages** permissions.
+4. On the **Bot** page, enable **Message Content Intent** under **Privileged Gateway Intents**. The invite filter needs it to inspect messages. Presence Intent and Server Members Intent can remain disabled.
+5. Copy the install link, open it, and add the bot to a server you manage.
+6. Optional but useful: in Discord, enable Developer Mode under **User Settings > Advanced**, right-click your server, and choose **Copy Server ID**. Use this as `TEST_GUILD_ID` while developing.
 
 ## 2. Run it on your computer
 
@@ -50,7 +60,7 @@ TrueNAS needs an image it can pull. The included GitHub workflow publishes one t
 
 ## 4. Host it on TrueNAS SCALE 24.10 or newer
 
-Recent SCALE releases use Docker for Apps. No storage mount or port forwarding is needed for this bot.
+Recent SCALE releases use Docker for Apps. The bot needs a small private `/data` storage mount, but no inbound port or router forwarding.
 
 1. In TrueNAS, make sure the Apps pool has been configured.
 2. Go to **Apps > Discover Apps > Custom App**.
@@ -61,11 +71,16 @@ Recent SCALE releases use Docker for Apps. No storage mount or port forwarding i
    - Pull policy: **Always** (useful while developing)
 5. Add environment variables:
    - `DISCORD_TOKEN` = the bot token
+   - `MINECRAFT_SERVER` = the address players use, such as `play.example.net:25565`
+   - `MINECRAFT_EDITION` = `java` or `bedrock`
+   - `INVITE_EXEMPT_CHANNELS` = `partners,announcements,our-ad`
+   - `API_ALLOWED_ROLES` = `Owner,Manager`
    - `TEST_GUILD_ID` = your server ID (optional)
    - `LOG_LEVEL` = `INFO` (optional)
 6. Set restart policy to **Unless Stopped**.
-7. Do not add ports, host networking, privileged mode, storage, or extra capabilities.
-8. Save/install. Open the app's logs and look for `Logged in as` and `Synced ... command(s)`.
+7. Add an **ixVolume** or host-path storage mount at `/data`. This keeps the private API configuration and synced economy data across container updates. Do not expose `/data` through SMB or other shares.
+8. Do not add ports, host networking, privileged mode, or extra capabilities.
+9. Save/install. Open the app's logs and look for `Logged in as` and `Synced ... command(s)`.
 
 If your Custom App screen offers a Docker Compose YAML editor instead, use this, replacing both placeholders:
 
@@ -82,9 +97,52 @@ services:
 
 Treat the token like a password. Anyone who gets it can control the bot. If it leaks, reset it immediately in the Developer Portal and update TrueNAS.
 
+### Minecraft API key
+
+`/stats` uses Minecraft's public server-status protocol through `mcstatus`; it does not require an API account or key. The NAS must be able to make outbound DNS and network connections to the Minecraft server.
+
+### Spawner rates and order prices
+
+Install `DensityBridge-1.0.0.jar` on the Paper server. It reads the installed DonutSpawners configuration and active Density orders directly, so there is no third-party API key to obtain and no need to maintain prices by hand. `config/economy.json` remains only as an offline example/fallback.
+
+### Private API commands
+
+The Discord server owner is always authorized. Members with a role named `Owner` or `Manager` are also authorized by default. Change `API_ALLOWED_ROLES` in TrueNAS to use different comma-separated role names.
+
+- `/api set-url` stores the full JSON API endpoint.
+- `/api set-key` opens a private modal and stores the key without displaying it.
+- `/api status` shows which parts are configured without revealing their values.
+- `/api test` checks the endpoint and reports only its HTTP result.
+- `/api sync` imports spawner counts, full drop tables, stacking efficiency, and the active order book.
+
+DensityBridge provides the endpoint in this shape (shortened here):
+
+```json
+{
+  "spawners": {
+    "zombie": {
+      "display_name": "Zombie Spawner",
+      "drop_name": "Rotten Flesh",
+      "server_count": 125,
+      "physical_blocks": 4,
+      "stacking_efficiency_exponent": 1,
+      "drops": [
+        {
+          "material": "ROTTEN_FLESH",
+          "drops_per_hour_per_spawner": 576,
+          "order_book": [{"price": 2, "remaining": 10000}]
+        }
+      ]
+    }
+  }
+}
+```
+
+When a key is configured, the bot sends it both as `Authorization: Bearer <key>` and `X-API-Key: <key>` for compatibility. Use HTTPS whenever the API is not confined to a trusted private network. The key is stored at `/data/api-config.json` with owner-only file permissions and is never included in command output or logs.
+
 ## Updating the bot
 
-Edit or add files in `cogs/`, push to `main`, and let GitHub build a new `latest` image. Then use **Pull Image / Update / Redeploy** in the TrueNAS app menu (the exact label varies by SCALE release).
+Edit or add files in `cogs/` or `config/`, push to `main`, and let GitHub build a new `latest` image. Then use **Pull Image / Update / Redeploy** in the TrueNAS app menu (the exact label varies by SCALE release).
 
 To add a command, put another method in `General` using the same pattern:
 
@@ -102,6 +160,9 @@ With `TEST_GUILD_ID` set, command changes usually appear quickly. Global Discord
 - **Improper token / 401**: reset the token in Discord and update it in TrueNAS.
 - **Bot is offline**: inspect the TrueNAS app logs and confirm the NAS can reach the internet and resolve DNS.
 - **Commands are missing**: confirm the app was installed with the `applications.commands` scope, check `TEST_GUILD_ID`, and inspect the sync line in the logs.
+- **Invite links are not removed**: enable Message Content Intent in Discord and grant the bot Manage Messages in the channel.
+- **`/stats` says not configured**: add `MINECRAFT_SERVER` to the TrueNAS app environment variables and redeploy.
+- **`/stats` says offline**: verify the address, edition, DNS, port, and that the Minecraft server permits status pings.
 - **Image pull denied**: make the GHCR package public, or configure registry credentials in TrueNAS.
 
 ## Project layout

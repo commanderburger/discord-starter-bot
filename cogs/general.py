@@ -29,6 +29,47 @@ class General(commands.Cog):
         embed.add_field(name="discord.py", value=discord.__version__)
         await interaction.response.send_message(embed=embed)
 
+    @app_commands.command(name="help", description="Show all available bot commands")
+    async def help_command(self, interaction: discord.Interaction) -> None:
+        embed = discord.Embed(
+            title="Bot Commands",
+            description="Here is what I can do.",
+            color=discord.Color.blurple(),
+        )
+        embed.add_field(
+            name="Minecraft",
+            value=(
+                "`/stats` — Minecraft server status\n"
+                "`/links` — Server address and useful links\n"
+                "`/ordering` — Live item orders and prices\n"
+                "`/calc` — Live spawner drops and order money\n"
+                "`/spawner count` — Server-wide spawner totals"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="Server",
+            value="`/serverinfo` · `/userinfo` · `/avatar`",
+            inline=False,
+        )
+        embed.add_field(
+            name="Fun",
+            value="`/coinflip` · `/roll`",
+            inline=False,
+        )
+        embed.add_field(
+            name="General",
+            value="`/ping` · `/hello` · `/about` · `/help`",
+            inline=False,
+        )
+        embed.add_field(
+            name="Owner/Manager",
+            value="`/api status` · `/api test` · `/api set-url` · `/api set-key` · `/api sync`",
+            inline=False,
+        )
+        embed.set_footer(text="Discord invite links are removed outside approved advert channels.")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
 
 async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(General(bot))

@@ -12,6 +12,9 @@ RUN pip install --no-cache-dir --requirement requirements.txt
 
 COPY --chown=bot:bot bot.py ./
 COPY --chown=bot:bot cogs ./cogs
+COPY --chown=bot:bot config ./config
+
+RUN mkdir /data && chown bot:bot /data
 
 USER bot
 CMD ["python", "bot.py"]

@@ -14,11 +14,22 @@ log = logging.getLogger("starter-bot")
 
 class StarterBot(commands.Bot):
     def __init__(self) -> None:
-        # Slash commands do not require the privileged Message Content intent.
-        super().__init__(command_prefix=commands.when_mentioned, intents=discord.Intents.default())
+        intents = discord.Intents.default()
+        # Required for the Discord-invite moderation filter.
+        # This must also be enabled on the Bot page in Discord's Developer Portal.
+        intents.message_content = True
+        super().__init__(command_prefix=commands.when_mentioned, intents=intents)
 
     async def setup_hook(self) -> None:
-        await self.load_extension("cogs.general")
+        for extension in (
+            "cogs.general",
+            "cogs.moderation",
+            "cogs.minecraft",
+            "cogs.economy",
+            "cogs.fun",
+            "cogs.api_admin",
+        ):
+            await self.load_extension(extension)
 
         # A test guild makes command changes appear almost immediately.
         # Remove TEST_GUILD_ID later to use globally synced commands instead.
