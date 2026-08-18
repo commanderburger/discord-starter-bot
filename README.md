@@ -103,7 +103,7 @@ Treat the token like a password. Anyone who gets it can control the bot. If it l
 
 ### Spawner rates and order prices
 
-Install `DensityBridge-1.0.0.jar` on the Paper server. It reads the installed DonutSpawners configuration and active Density orders directly, so there is no third-party API key to obtain and no need to maintain prices by hand. `config/economy.json` remains only as an offline example/fallback.
+Install `DensityBridge-1.1.0.jar` on the Paper server. It reads DonutSpawners rates, every loaded Minecraft world's real spawner stacks (including Nether worlds), active Density orders, Density `/sell` prices, and auction history directly. There is no third-party API key to obtain and no need to maintain prices by hand. Decoy spawners stay in the raw private API for diagnostics but are deliberately hidden from `/spawner count` and `/calc`.
 
 ### Private API commands
 
@@ -113,7 +113,18 @@ The Discord server owner is always authorized. Members with a role named `Owner`
 - `/api set-key` opens a private modal and stores the key without displaying it.
 - `/api status` shows which parts are configured without revealing their values.
 - `/api test` checks the endpoint and reports only its HTTP result.
-- `/api sync` imports spawner counts, full drop tables, stacking efficiency, and the active order book.
+- `/api sync` imports spawner counts, full drop tables, stacking efficiency, the active order book, `/sell` prices, and auction trades.
+
+### Added commands
+
+- `/farm pickle` calculates gross and net sea-pickle profit per bone and per hour from the live `/sell` prices.
+- `/farm bamboo` calculates live bamboo profit per hour.
+- `/auction browse` shows current listings; `/auction track` draws a bought/sold trading-volume graph.
+- `/ban`, `/kick`, `/mute`, `/tempmute`, `/unmute`, `/purge`, `/warn`, `/warnings`, and `/clearwarnings` provide permission-checked moderation.
+- `/gcreate`, `/gend`, and `/greroll` manage reaction giveaways.
+- `/autogcreate`, `/autoglist`, and `/autogstop` manage persistent repeating giveaways.
+
+Giveaways and warnings are saved under `/data`, so the existing TrueNAS `/data` storage mount keeps them after updates and restarts.
 
 DensityBridge provides the endpoint in this shape (shortened here):
 
@@ -174,3 +185,4 @@ Dockerfile                     production container
 compose.yaml                   local Docker testing
 .github/workflows/...          publishes the image to GHCR
 ```
+
