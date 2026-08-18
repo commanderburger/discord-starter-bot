@@ -10,6 +10,8 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from cogs.permissions import StaffOnly, staff_only
+
 
 log = logging.getLogger("starter-bot.moderation")
 DATA_DIR = Path(os.getenv("BOT_DATA_DIR", "/data"))
@@ -134,8 +136,7 @@ class Moderation(commands.Cog):
             await self.check_message(after)
 
     @app_commands.command(name="ban", description="Ban a member from the server")
-    @app_commands.default_permissions(ban_members=True)
-    @app_commands.checks.has_permissions(ban_members=True)
+    @staff_only("ban_members")
     async def ban(self, interaction: discord.Interaction, member: discord.Member, reason: str = "No reason provided") -> None:
         if error := self.target_allowed(interaction, member):
             await interaction.response.send_message(error, ephemeral=True)
@@ -145,8 +146,7 @@ class Moderation(commands.Cog):
         await self.send_mod_log(interaction.guild, "Member banned", f"{member} was banned by {interaction.user.mention}.\nReason: {reason}")
 
     @app_commands.command(name="kick", description="Kick a member from the server")
-    @app_commands.default_permissions(kick_members=True)
-    @app_commands.checks.has_permissions(kick_members=True)
+    @staff_only("kick_members")
     async def kick(self, interaction: discord.Interaction, member: discord.Member, reason: str = "No reason provided") -> None:
         if error := self.target_allowed(interaction, member):
             await interaction.response.send_message(error, ephemeral=True)
@@ -156,15 +156,13 @@ class Moderation(commands.Cog):
         await self.send_mod_log(interaction.guild, "Member kicked", f"{member} was kicked by {interaction.user.mention}.\nReason: {reason}")
 
     @app_commands.command(name="mute", description="Mute a member for 24 hours")
-    @app_commands.default_permissions(moderate_members=True)
-    @app_commands.checks.has_permissions(moderate_members=True)
+    @staff_only("moderate_members")
     async def mute(self, interaction: discord.Interaction, member: discord.Member, reason: str = "No reason provided") -> None:
         await self.apply_timeout(interaction, member, timedelta(hours=24), reason)
 
     @app_commands.command(name="tempmute", description="Mute a member for a chosen time")
     @app_commands.describe(duration="Examples: 30m, 2h, 3d, 1w")
-    @app_commands.default_permissions(moderate_members=True)
-    @app_commands.checks.has_permissions(moderate_members=True)
+    @staff_only("moderate_members")
     async def tempmute(self, interaction: discord.Interaction, member: discord.Member, duration: str, reason: str = "No reason provided") -> None:
         try:
             parsed = parse_duration(duration)
@@ -183,8 +181,7 @@ class Moderation(commands.Cog):
         await self.send_mod_log(interaction.guild, "Member muted", f"{member.mention} was muted by {interaction.user.mention} until <t:{int(until.timestamp())}:F>.\nReason: {reason}")
 
     @app_commands.command(name="unmute", description="Remove a member's timeout")
-    @app_commands.default_permissions(moderate_members=True)
-    @app_commands.checks.has_permissions(moderate_members=True)
+    @staff_only("moderate_members")
     async def unmute(self, interaction: discord.Interaction, member: discord.Member, reason: str = "Mute removed") -> None:
         if error := self.target_allowed(interaction, member):
             await interaction.response.send_message(error, ephemeral=True)
@@ -194,8 +191,7 @@ class Moderation(commands.Cog):
         await self.send_mod_log(interaction.guild, "Member unmuted", f"{member.mention} was unmuted by {interaction.user.mention}.\nReason: {reason}")
 
     @app_commands.command(name="purge", description="Delete recent messages from this channel")
-    @app_commands.default_permissions(manage_messages=True)
-    @app_commands.checks.has_permissions(manage_messages=True)
+    @staff_only("manage_messages")
     async def purge(self, interaction: discord.Interaction, amount: app_commands.Range[int, 1, 100]) -> None:
         if not isinstance(interaction.channel, discord.TextChannel):
             await interaction.response.send_message("Use this in a normal text channel.", ephemeral=True)
@@ -205,8 +201,7 @@ class Moderation(commands.Cog):
         await interaction.followup.send(f"Deleted {len(deleted)} message(s).", ephemeral=True)
 
     @app_commands.command(name="warn", description="Record a warning for a member")
-    @app_commands.default_permissions(moderate_members=True)
-    @app_commands.checks.has_permissions(moderate_members=True)
+    @staff_only("moderate_members")
     async def warn(self, interaction: discord.Interaction, member: discord.Member, reason: str) -> None:
         if error := self.target_allowed(interaction, member):
             await interaction.response.send_message(error, ephemeral=True)
@@ -220,8 +215,7 @@ class Moderation(commands.Cog):
         await self.send_mod_log(interaction.guild, "Member warned", f"{member.mention} was warned by {interaction.user.mention}.\nReason: {reason}")
 
     @app_commands.command(name="warnings", description="Show a member's recorded warnings")
-    @app_commands.default_permissions(moderate_members=True)
-    @app_commands.checks.has_permissions(moderate_members=True)
+    @staff_only("moderate_members")
     async def warnings(self, interaction: discord.Interaction, member: discord.Member) -> None:
         entries = load_warnings().get(str(interaction.guild_id), {}).get(str(member.id), [])
         lines = [f"**{index}.** {entry.get('reason', 'No reason')} — <@{entry.get('moderator_id', 0)}>" for index, entry in enumerate(entries[-10:], 1)]
@@ -229,8 +223,7 @@ class Moderation(commands.Cog):
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.command(name="clearwarnings", description="Clear all recorded warnings for a member")
-    @app_commands.default_permissions(moderate_members=True)
-    @app_commands.checks.has_permissions(moderate_members=True)
+    @staff_only("moderate_members")
     async def clearwarnings(self, interaction: discord.Interaction, member: discord.Member) -> None:
         async with self.warning_lock:
             data = load_warnings()
@@ -239,8 +232,8 @@ class Moderation(commands.Cog):
         await interaction.response.send_message(f"Cleared **{removed}** warning(s) for {member.mention}.", ephemeral=True)
 
     async def cog_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError) -> None:
-        if isinstance(error, app_commands.MissingPermissions):
-            message = "You do not have permission to use that moderation command."
+        if isinstance(error, (StaffOnly, app_commands.MissingPermissions)):
+            message = "This command is for staff only."
         elif isinstance(error, app_commands.BotMissingPermissions):
             message = "The bot is missing the required Discord permission."
         elif isinstance(error, discord.Forbidden):

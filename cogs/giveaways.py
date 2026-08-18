@@ -12,6 +12,8 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
+from cogs.permissions import StaffOnly, staff_only
+
 
 log = logging.getLogger("starter-bot.giveaways")
 DATA_FILE = Path(os.getenv("BOT_DATA_DIR", "/data")) / "giveaways.json"
@@ -158,8 +160,7 @@ class Giveaways(commands.Cog):
 
     @app_commands.command(name="gcreate", description="Create a reaction giveaway")
     @app_commands.describe(duration="Examples: 10m, 2h, 1d", prize="What the winner receives")
-    @app_commands.default_permissions(manage_guild=True)
-    @app_commands.checks.has_permissions(manage_guild=True)
+    @staff_only("manage_guild")
     async def gcreate(
         self,
         interaction: discord.Interaction,
@@ -183,23 +184,20 @@ class Giveaways(commands.Cog):
         await interaction.followup.send(f"Giveaway created: {message.jump_url}", ephemeral=True)
 
     @app_commands.command(name="gend", description="End a giveaway now")
-    @app_commands.default_permissions(manage_guild=True)
-    @app_commands.checks.has_permissions(manage_guild=True)
+    @staff_only("manage_guild")
     async def gend(self, interaction: discord.Interaction, message_id: str) -> None:
         await interaction.response.defer(ephemeral=True)
         await interaction.followup.send(await self.end_giveaway(message_id), ephemeral=True)
 
     @app_commands.command(name="greroll", description="Choose new winner(s) for an ended giveaway")
-    @app_commands.default_permissions(manage_guild=True)
-    @app_commands.checks.has_permissions(manage_guild=True)
+    @staff_only("manage_guild")
     async def greroll(self, interaction: discord.Interaction, message_id: str) -> None:
         await interaction.response.defer(ephemeral=True)
         await interaction.followup.send(await self.end_giveaway(message_id, reroll=True), ephemeral=True)
 
     @app_commands.command(name="autogcreate", description="Schedule giveaways to repeat automatically")
     @app_commands.describe(interval="Time between giveaways", giveaway_duration="How long each giveaway stays open")
-    @app_commands.default_permissions(manage_guild=True)
-    @app_commands.checks.has_permissions(manage_guild=True)
+    @staff_only("manage_guild")
     async def autogcreate(
         self,
         interaction: discord.Interaction,
@@ -235,8 +233,7 @@ class Giveaways(commands.Cog):
         await interaction.response.send_message(f"Auto giveaway schedule `{schedule_id}` saved. The first one will post shortly.", ephemeral=True)
 
     @app_commands.command(name="autoglist", description="List automatic giveaway schedules")
-    @app_commands.default_permissions(manage_guild=True)
-    @app_commands.checks.has_permissions(manage_guild=True)
+    @staff_only("manage_guild")
     async def autoglist(self, interaction: discord.Interaction) -> None:
         schedules = load_data().get("auto", {})
         lines = [
@@ -247,8 +244,7 @@ class Giveaways(commands.Cog):
         await interaction.response.send_message("\n".join(lines) or "No automatic giveaways are active.", ephemeral=True)
 
     @app_commands.command(name="autogstop", description="Stop an automatic giveaway schedule")
-    @app_commands.default_permissions(manage_guild=True)
-    @app_commands.checks.has_permissions(manage_guild=True)
+    @staff_only("manage_guild")
     async def autogstop(self, interaction: discord.Interaction, schedule_id: str) -> None:
         async with self.data_lock:
             data = load_data()
@@ -259,6 +255,19 @@ class Giveaways(commands.Cog):
             entry["active"] = False
             await self.save(data)
         await interaction.response.send_message(f"Stopped auto giveaway `{schedule_id}`.", ephemeral=True)
+
+    async def cog_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError) -> None:
+        if isinstance(error, StaffOnly):
+            message = "This command is for staff only."
+        elif isinstance(error, discord.Forbidden):
+            message = "Discord blocked that action. Check the bot role and channel permissions."
+        else:
+            log.exception("Giveaway command failed", exc_info=error)
+            message = f"That giveaway action failed: {error}"
+        if interaction.response.is_done():
+            await interaction.followup.send(message, ephemeral=True)
+        else:
+            await interaction.response.send_message(message, ephemeral=True)
 
     @tasks.loop(seconds=15)
     async def giveaway_loop(self) -> None:
@@ -302,4 +311,3 @@ class Giveaways(commands.Cog):
 
 async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(Giveaways(bot))
-

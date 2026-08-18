@@ -61,7 +61,7 @@ class General(commands.Cog):
             inline=False,
         )
         embed.add_field(
-            name="Giveaways (Manage Server)",
+            name="Giveaways (Staff)",
             value=(
                 "`/gcreate` · `/gend` · `/greroll`\n"
                 "`/autogcreate` · `/autoglist` · `/autogstop`"
@@ -69,7 +69,7 @@ class General(commands.Cog):
             inline=False,
         )
         embed.add_field(
-            name="Moderation",
+            name="Moderation (Staff)",
             value=(
                 "`/ban` · `/kick` · `/mute` · `/tempmute` · `/unmute`\n"
                 "`/purge` · `/warn` · `/warnings` · `/clearwarnings`"
@@ -92,4 +92,3 @@ class General(commands.Cog):
 
 async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(General(bot))
-
