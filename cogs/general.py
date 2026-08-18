@@ -43,7 +43,10 @@ class General(commands.Cog):
                 "`/links` — Server address and useful links\n"
                 "`/ordering` — Live item orders and prices\n"
                 "`/calc` — Live spawner drops and order money\n"
-                "`/spawner count` — Server-wide spawner totals"
+                "`/spawner count` — Real Overworld and Nether spawner totals\n"
+                "`/sellprice` — Live /sell value\n"
+                "`/farm pickle` · `/farm bamboo` — Farm profit\n"
+                "`/auction browse` · `/auction track` — Auction listings and graph"
             ),
             inline=False,
         )
@@ -55,6 +58,22 @@ class General(commands.Cog):
         embed.add_field(
             name="Fun",
             value="`/coinflip` · `/roll`",
+            inline=False,
+        )
+        embed.add_field(
+            name="Giveaways (Manage Server)",
+            value=(
+                "`/gcreate` · `/gend` · `/greroll`\n"
+                "`/autogcreate` · `/autoglist` · `/autogstop`"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="Moderation",
+            value=(
+                "`/ban` · `/kick` · `/mute` · `/tempmute` · `/unmute`\n"
+                "`/purge` · `/warn` · `/warnings` · `/clearwarnings`"
+            ),
             inline=False,
         )
         embed.add_field(
@@ -73,3 +92,4 @@ class General(commands.Cog):
 
 async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(General(bot))
+
