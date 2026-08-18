@@ -291,7 +291,7 @@ class ApiAdmin(commands.Cog):
 
             sell_prices = payload.get("sell_prices")
             if isinstance(sell_prices, dict):
-                for material, incoming in list(sell_prices.items())[:1000]:
+                for material, incoming in list(sell_prices.items())[:5000]:
                     if not isinstance(material, str) or not isinstance(incoming, dict):
                         continue
                     price = incoming.get("price")
@@ -349,4 +349,3 @@ class ApiAdmin(commands.Cog):
 
 async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(ApiAdmin(bot))
-
