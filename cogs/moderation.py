@@ -60,7 +60,7 @@ class Moderation(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
         self.warning_lock = asyncio.Lock()
-        configured = os.getenv("INVITE_EXEMPT_CHANNELS", "partners,announcements,our-ad")
+        configured = os.getenv("INVITE_EXEMPT_CHANNELS", "partners,announcements,our-ad,ad")
         self.exempt_channels = {
             normalise_channel_name(name) for name in configured.split(",") if name.strip()
         }
@@ -256,4 +256,3 @@ class Moderation(commands.Cog):
 
 async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(Moderation(bot))
-
