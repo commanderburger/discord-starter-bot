@@ -28,6 +28,7 @@ class StarterBot(commands.Bot):
             "cogs.economy",
             "cogs.fun",
             "cogs.api_admin",
+            "cogs.giveaways",
         ):
             await self.load_extension(extension)
 
@@ -57,3 +58,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
