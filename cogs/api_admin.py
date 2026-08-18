@@ -17,7 +17,7 @@ DATA_DIR = Path(os.getenv("BOT_DATA_DIR", "/data"))
 API_CONFIG_FILE = DATA_DIR / "api-config.json"
 SYNCED_ECONOMY_FILE = DATA_DIR / "economy.json"
 BUNDLED_ECONOMY_FILE = Path(__file__).resolve().parent.parent / "config" / "economy.json"
-MAX_RESPONSE_BYTES = 1_000_000
+MAX_RESPONSE_BYTES = 2_500_000
 
 
 def atomic_write_json(path: Path, value: dict) -> None:
@@ -123,7 +123,7 @@ class ApiAdmin(commands.Cog):
                 async for chunk in response.content.iter_chunked(64 * 1024):
                     body.extend(chunk)
                     if len(body) > MAX_RESPONSE_BYTES:
-                        raise ValueError("The API response is larger than 1 MB.")
+                        raise ValueError("The API response is larger than 2.5 MB.")
                 try:
                     payload = json.loads(body.decode("utf-8")) if body else {}
                 except (UnicodeDecodeError, json.JSONDecodeError):
@@ -211,6 +211,8 @@ class ApiAdmin(commands.Cog):
                 "live_sync": True,
                 "synced_at": datetime.now(UTC).isoformat(),
                 "spawners": {},
+                "sell_prices": {},
+                "auctions": {"open": [], "history": []},
             }
             changed = 0
             for name, incoming in payload["spawners"].items():
@@ -287,6 +289,52 @@ class ApiAdmin(commands.Cog):
                 economy["spawners"][name[:100]] = current
                 changed += 1
 
+            sell_prices = payload.get("sell_prices")
+            if isinstance(sell_prices, dict):
+                for material, incoming in list(sell_prices.items())[:1000]:
+                    if not isinstance(material, str) or not isinstance(incoming, dict):
+                        continue
+                    price = incoming.get("price")
+                    if not isinstance(price, (int, float)) or isinstance(price, bool) or price < 0:
+                        continue
+                    economy["sell_prices"][material[:100].upper()] = {
+                        "display_name": str(incoming.get("display_name", material.replace("_", " ").title()))[:100],
+                        "price": price,
+                    }
+
+            auctions = payload.get("auctions")
+            if isinstance(auctions, dict):
+                for collection_name, maximum in (("open", 1000), ("history", 5000)):
+                    collection = auctions.get(collection_name)
+                    if not isinstance(collection, list):
+                        continue
+                    for incoming in collection[:maximum]:
+                        if not isinstance(incoming, dict):
+                            continue
+                        material = incoming.get("material")
+                        price = incoming.get("price")
+                        if (
+                            not isinstance(material, str)
+                            or not isinstance(price, (int, float))
+                            or isinstance(price, bool)
+                            or price < 0
+                        ):
+                            continue
+                        clean = {
+                            "material": material[:100].upper(),
+                            "display_name": str(incoming.get("display_name", material.replace("_", " ").title()))[:100],
+                            "amount": max(1, int(incoming.get("amount", 1))) if isinstance(incoming.get("amount", 1), (int, float)) else 1,
+                            "price": price,
+                        }
+                        if collection_name == "open":
+                            clean["id"] = str(incoming.get("id", ""))[:100]
+                            clean["seller_name"] = str(incoming.get("seller_name", "Unknown"))[:100]
+                            clean["created_at"] = incoming.get("created_at", 0)
+                            clean["expires_at"] = incoming.get("expires_at", 0)
+                        else:
+                            clean["created_at"] = incoming.get("created_at", 0)
+                        economy["auctions"][collection_name].append(clean)
+
             await asyncio.to_thread(atomic_write_json, SYNCED_ECONOMY_FILE, economy)
         except (aiohttp.ClientError, asyncio.TimeoutError, ValueError, OSError) as error:
             log.warning("API sync failed: %s", error)
@@ -294,10 +342,11 @@ class ApiAdmin(commands.Cog):
             return
 
         await interaction.followup.send(
-            f"Synced **{changed}** spawner type(s). `/calc`, `/ordering`, and `/spawner count` now use them.",
+            f"Synced **{changed}** spawner type(s), live sell prices, and auction history. Farm, auction, and spawner commands are refreshed.",
             ephemeral=True,
         )
 
 
 async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(ApiAdmin(bot))
+
