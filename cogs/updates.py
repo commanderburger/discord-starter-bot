@@ -13,7 +13,7 @@ from cogs.permissions import normalise_role_name
 log = logging.getLogger("starter-bot.updates")
 DATA_FILE = Path(os.getenv("BOT_DATA_DIR", "/data")) / "release-announcements.json"
 UPDATES_CHANNEL_NAME = os.getenv("BOT_UPDATES_CHANNEL", "bot-updates")
-RELEASE_ID = "2026-08-25-levels-and-ticket-routing-v11"
+RELEASE_ID = "2026-08-25-giveaway-buttons-v12"
 
 
 def load_announced_releases() -> set[str]:
@@ -83,12 +83,11 @@ class Updates(commands.Cog):
                 embed = discord.Embed(
                     title="Density Bot Update",
                     description=(
-                        "• Added chat XP and levels from normal messages and attachments.\n"
-                        "• Added `/rank` and `/leaderboard`.\n"
-                        "• Added level-up announcements in #special-ranks.\n"
-                        "• New tickets now ping @Staff Team.\n"
-                        "• Support, bug report and giveaway tickets go to Support Tickets.\n"
-                        "• Partnership tickets go to Partnership Requests."
+                        "• Giveaways now use the requested detailed card layout in Discord blue.\n"
+                        "• Members enter or leave with an **Enter** button and the count updates live.\n"
+                        "• Ended giveaways show the winner, status, entries and giveaway ID.\n"
+                        "• Selected winners can use the green **Claim Prize** button.\n"
+                        "• Entry and claim buttons continue working after bot restarts."
                     ),
                     color=discord.Color.blurple(),
                     timestamp=discord.utils.utcnow(),

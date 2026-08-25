@@ -20,6 +20,8 @@ DATA_FILE = Path(os.getenv("BOT_DATA_DIR", "/data")) / "giveaways.json"
 DURATION_RE = re.compile(r"^(\d+)([smhdw])$", re.IGNORECASE)
 ENTRY_EMOJI = "🎉"
 GIVEAWAY_PING_ROLE = os.getenv("GIVEAWAY_PING_ROLE", "giveaway ping")
+ENTER_BUTTON_ID = "density-giveaway-enter-v1"
+CLAIM_BUTTON_ID = "density-giveaway-claim-v1"
 
 
 def parse_duration(value: str) -> int:
@@ -40,6 +42,10 @@ def parse_winner_count(value: str) -> int:
     if not 1 <= winners <= 20:
         raise ValueError("Winners must be a whole number from 1 to 20.")
     return winners
+
+
+def mention_list(user_ids: list[int]) -> str:
+    return ", ".join(f"<@{user_id}>" for user_id in user_ids) if user_ids else "No valid entries"
 
 
 def resolve_text_channel(
@@ -237,10 +243,48 @@ class AutoGiveawayCreateModal(discord.ui.Modal, title="Create an automatic givea
             await interaction.response.send_message(message, ephemeral=True)
 
 
+class GiveawayView(discord.ui.View):
+    """Persistent giveaway controls used by both manual and automatic giveaways."""
+
+    def __init__(
+        self,
+        cog: "Giveaways",
+        *,
+        entry_count: int = 0,
+        ended: bool = False,
+        claim_available: bool = False,
+        persistent_registration: bool = False,
+    ) -> None:
+        super().__init__(timeout=None)
+        self.cog = cog
+        self.enter_button.label = f"Enter ({entry_count})"
+        self.enter_button.disabled = ended
+        self.claim_button.disabled = not claim_available
+        if not ended and not persistent_registration:
+            self.remove_item(self.claim_button)
+
+    @discord.ui.button(
+        label="Enter (0)",
+        style=discord.ButtonStyle.primary,
+        custom_id=ENTER_BUTTON_ID,
+    )
+    async def enter_button(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+        await self.cog.handle_entry_button(interaction)
+
+    @discord.ui.button(
+        label="Claim Prize",
+        style=discord.ButtonStyle.success,
+        custom_id=CLAIM_BUTTON_ID,
+    )
+    async def claim_button(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+        await self.cog.handle_claim_button(interaction)
+
+
 class Giveaways(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
         self.data_lock = asyncio.Lock()
+        self.bot.add_view(GiveawayView(self, persistent_registration=True))
         self.giveaway_loop.start()
 
     def cog_unload(self) -> None:
@@ -248,6 +292,115 @@ class Giveaways(commands.Cog):
 
     async def save(self, data: dict) -> None:
         await asyncio.to_thread(atomic_write, data)
+
+    @staticmethod
+    def entry_count(entry: dict) -> int:
+        entries = entry.get("entries", [])
+        return len(entries) if isinstance(entries, list) else 0
+
+    @staticmethod
+    def claim_available(entry: dict) -> bool:
+        winners = {int(user_id) for user_id in entry.get("winners", [])}
+        claims = {int(user_id) for user_id in entry.get("claims", [])}
+        return bool(winners - claims)
+
+    def build_giveaway_embed(self, entry: dict) -> discord.Embed:
+        ended = bool(entry.get("ended"))
+        prize = str(entry.get("prize", "Giveaway"))
+        title = f"🎉 Giveaway Ended: {prize}" if ended else f"🎉 Giveaway: {prize}"
+        status = "Ended" if ended else f"Ends <t:{int(entry.get('ends_at', 0))}:R>"
+        lines = [
+            "Click the button below to enter.",
+            "",
+            f"**Prize:** {prize}",
+            f"**Type:** {entry.get('type', 'Default')}",
+            f"**Hosted by:** <@{int(entry.get('host_id', 0))}>",
+            f"**Winners:** {int(entry.get('winner_count', 1))}",
+            f"**Status:** {status}",
+            f"**Entries:** {self.entry_count(entry)}",
+        ]
+        if ended:
+            winner_ids = [int(user_id) for user_id in entry.get("winners", [])]
+            winner_label = "Winner" if len(winner_ids) == 1 else "Winners"
+            lines.append(f"**{winner_label}:** {mention_list(winner_ids)}")
+        lines.append(f"**Giveaway ID:** {entry.get('giveaway_id', 'Legacy')}")
+        return discord.Embed(
+            title=title,
+            description="\n".join(lines),
+            color=discord.Color.blurple(),
+        )
+
+    def build_giveaway_view(self, entry: dict) -> GiveawayView:
+        return GiveawayView(
+            self,
+            entry_count=self.entry_count(entry),
+            ended=bool(entry.get("ended")),
+            claim_available=self.claim_available(entry),
+        )
+
+    async def handle_entry_button(self, interaction: discord.Interaction) -> None:
+        if interaction.message is None:
+            await interaction.response.send_message("I could not identify this giveaway.", ephemeral=True)
+            return
+        message_id = str(interaction.message.id)
+        async with self.data_lock:
+            data = load_data()
+            entry = data.get("giveaways", {}).get(message_id)
+            if not isinstance(entry, dict):
+                await interaction.response.send_message("This giveaway is no longer available.", ephemeral=True)
+                return
+            if entry.get("ended"):
+                await interaction.response.send_message("This giveaway has ended.", ephemeral=True)
+                return
+            stored_entries = entry.get("entries", [])
+            entries = (
+                list(dict.fromkeys(int(user_id) for user_id in stored_entries))
+                if isinstance(stored_entries, list)
+                else []
+            )
+            entry["entries"] = entries
+            user_id = interaction.user.id
+            if user_id in entries:
+                entries.remove(user_id)
+                result = "You left the giveaway."
+            else:
+                entries.append(user_id)
+                result = "You entered the giveaway. Good luck!"
+            await self.save(data)
+            embed = self.build_giveaway_embed(entry)
+            view = self.build_giveaway_view(entry)
+        await interaction.response.edit_message(embed=embed, view=view)
+        await interaction.followup.send(result, ephemeral=True)
+
+    async def handle_claim_button(self, interaction: discord.Interaction) -> None:
+        if interaction.message is None:
+            await interaction.response.send_message("I could not identify this giveaway.", ephemeral=True)
+            return
+        message_id = str(interaction.message.id)
+        async with self.data_lock:
+            data = load_data()
+            entry = data.get("giveaways", {}).get(message_id)
+            if not isinstance(entry, dict) or not entry.get("ended"):
+                await interaction.response.send_message("This prize is not ready to claim yet.", ephemeral=True)
+                return
+            winner_ids = [int(user_id) for user_id in entry.get("winners", [])]
+            if interaction.user.id not in winner_ids:
+                await interaction.response.send_message("Only a selected winner can claim this prize.", ephemeral=True)
+                return
+            claims = entry.setdefault("claims", [])
+            if interaction.user.id in claims:
+                await interaction.response.send_message("You have already claimed this prize.", ephemeral=True)
+                return
+            claims.append(interaction.user.id)
+            entry["claimed_at"] = int(datetime.now(UTC).timestamp())
+            await self.save(data)
+            embed = self.build_giveaway_embed(entry)
+            view = self.build_giveaway_view(entry)
+        await interaction.response.edit_message(embed=embed, view=view)
+        await interaction.followup.send(
+            "Prize claimed! A staff member can now arrange your reward.",
+            ephemeral=True,
+        )
 
     async def create_giveaway(
         self,
@@ -259,16 +412,22 @@ class Giveaways(commands.Cog):
         schedule_id: str | None = None,
     ) -> tuple[discord.Message, bool]:
         ends_at = int(datetime.now(UTC).timestamp()) + duration_seconds
-        embed = discord.Embed(
-            title=f"🎉 {prize}",
-            description=(
-                f"React with {ENTRY_EMOJI} to enter!\n\n"
-                f"**Winners:** {winner_count}\n"
-                f"**Ends:** <t:{ends_at}:R>\n"
-                f"**Hosted by:** <@{host_id}>"
-            ),
-            color=discord.Color.magenta(),
-        )
+        entry = {
+            "guild_id": channel.guild.id,
+            "channel_id": channel.id,
+            "host_id": host_id,
+            "prize": prize[:250],
+            "winner_count": winner_count,
+            "ends_at": ends_at,
+            "ended": False,
+            "schedule_id": schedule_id,
+            "giveaway_id": str(uuid.uuid4().int)[-8:],
+            "type": "Automatic" if schedule_id else "Default",
+            "entries": [],
+            "winners": [],
+            "claims": [],
+        }
+        embed = self.build_giveaway_embed(entry)
         ping_role = discord.utils.find(
             lambda role: normalise_role_name(role.name) == normalise_role_name(GIVEAWAY_PING_ROLE),
             channel.guild.roles,
@@ -281,43 +440,37 @@ class Giveaways(commands.Cog):
         message = await channel.send(
             content=ping_role.mention if ping_role else None,
             embed=embed,
+            view=self.build_giveaway_view(entry),
             allowed_mentions=allowed_mentions,
         )
-        await message.add_reaction(ENTRY_EMOJI)
         async with self.data_lock:
             data = load_data()
-            data["giveaways"][str(message.id)] = {
-                "guild_id": channel.guild.id,
-                "channel_id": channel.id,
-                "host_id": host_id,
-                "prize": prize[:250],
-                "winner_count": winner_count,
-                "ends_at": ends_at,
-                "ended": False,
-                "schedule_id": schedule_id,
-            }
+            data["giveaways"][str(message.id)] = entry
             await self.save(data)
         return message, ping_role is not None
 
-    async def eligible_users(self, message: discord.Message) -> list[discord.Member]:
+    async def eligible_user_ids(self, message: discord.Message, entry: dict) -> list[int]:
+        stored_entries = entry.get("entries")
+        if isinstance(stored_entries, list):
+            return list(dict.fromkeys(int(user_id) for user_id in stored_entries))
+        # Compatibility for giveaways created before entry buttons were added.
         reaction = discord.utils.find(lambda item: str(item.emoji) == ENTRY_EMOJI, message.reactions)
         if reaction is None:
             return []
-        users: list[discord.Member] = []
+        user_ids: list[int] = []
         async for user in reaction.users(limit=None):
             if user.bot:
                 continue
-            member = message.guild.get_member(user.id) if message.guild else None
-            if member is None:
-                continue
-            users.append(member)
-        return users
+            user_ids.append(user.id)
+        return user_ids
 
     async def end_giveaway(self, message_id: str, *, reroll: bool = False) -> str:
         data = load_data()
         entry = data.get("giveaways", {}).get(str(message_id))
         if not isinstance(entry, dict):
             return "I could not find that giveaway."
+        if entry.get("ended") and not reroll:
+            return "That giveaway has already ended."
         channel = self.bot.get_channel(int(entry.get("channel_id", 0)))
         if not isinstance(channel, discord.TextChannel):
             return "The giveaway channel no longer exists."
@@ -325,31 +478,31 @@ class Giveaways(commands.Cog):
             message = await channel.fetch_message(int(message_id))
         except (discord.NotFound, discord.Forbidden, discord.HTTPException):
             return "I could not access that giveaway message."
-        users = await self.eligible_users(message)
-        count = min(max(1, int(entry.get("winner_count", 1))), len(users))
-        winners = random.sample(users, count) if count else []
-        winner_text = ", ".join(user.mention for user in winners) if winners else "No valid entries"
-        if reroll:
-            await channel.send(f"🎉 **Rerolled {entry.get('prize', 'giveaway')}!** Winner(s): {winner_text}")
-            return f"Rerolled the giveaway. Winner(s): {winner_text}"
+        user_ids = await self.eligible_user_ids(message, entry)
+        count = min(max(1, int(entry.get("winner_count", 1))), len(user_ids))
+        winner_ids = random.sample(user_ids, count) if count else []
+        winner_text = mention_list(winner_ids)
+        entry.setdefault("giveaway_id", str(message.id)[-8:])
+        entry.setdefault("type", "Default")
+        entry["entries"] = user_ids
         entry["ended"] = True
-        entry["winners"] = [user.id for user in winners]
+        entry["winners"] = winner_ids
+        entry["claims"] = []
         entry["ended_at"] = int(datetime.now(UTC).timestamp())
         async with self.data_lock:
             current = load_data()
             current.setdefault("giveaways", {})[str(message_id)] = entry
             await self.save(current)
-        embed = message.embeds[0].copy() if message.embeds else discord.Embed(title=str(entry.get("prize", "Giveaway")))
-        embed.color = discord.Color.dark_grey()
-        embed.description = f"**Ended**\n**Winner(s):** {winner_text}\n**Hosted by:** <@{entry.get('host_id')}>"
+        embed = self.build_giveaway_embed(entry)
         try:
-            await message.edit(embed=embed)
+            await message.edit(embed=embed, view=self.build_giveaway_view(entry))
         except discord.HTTPException:
             pass
-        await channel.send(f"🎉 **{entry.get('prize', 'Giveaway')} has ended!** Winner(s): {winner_text}")
+        if reroll:
+            return f"Rerolled the giveaway. Winner(s): {winner_text}"
         return f"Ended the giveaway. Winner(s): {winner_text}"
 
-    @app_commands.command(name="gcreate", description="Create a reaction giveaway")
+    @app_commands.command(name="gcreate", description="Create a button-entry giveaway")
     @staff_only("manage_guild")
     async def gcreate(self, interaction: discord.Interaction) -> None:
         await interaction.response.send_modal(GiveawayCreateModal(self))
