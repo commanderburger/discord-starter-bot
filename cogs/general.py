@@ -52,7 +52,10 @@ class General(commands.Cog):
         )
         embed.add_field(
             name="Server",
-            value="`/serverinfo` · `/userinfo` · `/avatar`",
+            value=(
+                "`/serverinfo` · `/userinfo` · `/avatar`\n"
+                "`/rank` · `/leaderboard` — Chat levels"
+            ),
             inline=False,
         )
         embed.add_field(
@@ -71,7 +74,7 @@ class General(commands.Cog):
         embed.add_field(
             name="Tickets",
             value=(
-                "Use the menu in the ticket channel for Support, Partnerships or a Bug Report.\n"
+                "Use the menu in the ticket channel for Support, Partnerships, Bug Reports or Giveaways.\n"
                 "`/ticketsetup` — Manager, Co-Owner and Owner only"
             ),
             inline=False,
