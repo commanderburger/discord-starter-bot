@@ -20,16 +20,32 @@ from cogs.permissions import (
 log = logging.getLogger("starter-bot.tickets")
 PANEL_MARKER = "Density SMP Tickets v1"
 TICKET_CHANNEL_NAMES = os.getenv("TICKET_CHANNEL_NAMES", "ticket,tickets")
-TICKET_CATEGORY_NAME = os.getenv("TICKET_CATEGORY_NAME", "Tickets")
+SUPPORT_TICKET_CATEGORY_NAME = os.getenv(
+    "TICKET_SUPPORT_CATEGORY_NAME",
+    "Support Tickets",
+)
+PARTNERSHIP_TICKET_CATEGORY_NAME = os.getenv(
+    "TICKET_PARTNERSHIP_CATEGORY_NAME",
+    "Partnership Requests",
+)
+TICKET_STAFF_PING_ROLE = os.getenv("TICKET_STAFF_PING_ROLE", "Staff Team")
 TICKET_TYPES = {
     "support": ("Support", "❓", "Tell us what you need help with and a staff member will reply."),
     "partnership": ("Partnerships", "🤝", "Tell us about your partnership proposal."),
     "bug": ("Bug Report", "🛠️", "Explain the bug, what you expected and how to reproduce it."),
+    "giveaway": ("Giveaway", "🎉", "Tell us what help you need with a giveaway."),
+}
+TICKET_CATEGORY_NAMES = {
+    "support": SUPPORT_TICKET_CATEGORY_NAME,
+    "bug": SUPPORT_TICKET_CATEGORY_NAME,
+    "giveaway": SUPPORT_TICKET_CATEGORY_NAME,
+    "partnership": PARTNERSHIP_TICKET_CATEGORY_NAME,
 }
 TICKET_LOG_CHANNELS = {
     "support": os.getenv("TICKET_LOG_SUPPORT_CHANNEL", "ticket-logs-support"),
     "partnership": os.getenv("TICKET_LOG_PARTNERSHIPS_CHANNEL", "ticket-logs-partnerships"),
     "bug": os.getenv("TICKET_LOG_BUG_REPORT_CHANNEL", "ticket-logs-bug-report"),
+    "giveaway": os.getenv("TICKET_LOG_SUPPORT_CHANNEL", "ticket-logs-support"),
 }
 MAX_TRANSCRIPT_BYTES = 7_500_000
 
@@ -83,6 +99,12 @@ class TicketTypeSelect(discord.ui.Select):
                 value="bug",
                 description="Report a Minecraft, Discord or website problem",
                 emoji="🛠️",
+            ),
+            discord.SelectOption(
+                label="Giveaway",
+                value="giveaway",
+                description="Get help with a giveaway",
+                emoji="🎉",
             ),
         ]
         super().__init__(
@@ -255,11 +277,25 @@ class Tickets(commands.Cog):
         bot.add_view(TicketPanelView(self))
         bot.add_view(CloseTicketView(self))
 
-    def ticket_category(self, guild: discord.Guild) -> discord.CategoryChannel | None:
-        wanted = normalise_role_name(TICKET_CATEGORY_NAME)
+    def ticket_category(
+        self,
+        guild: discord.Guild,
+        ticket_type: str,
+    ) -> discord.CategoryChannel | None:
+        category_name = TICKET_CATEGORY_NAMES.get(ticket_type)
+        if category_name is None:
+            return None
+        wanted = normalise_role_name(category_name)
         return discord.utils.find(
             lambda category: normalise_role_name(category.name) == wanted,
             guild.categories,
+        )
+
+    def staff_ping_role(self, guild: discord.Guild) -> discord.Role | None:
+        wanted = normalise_role_name(TICKET_STAFF_PING_ROLE)
+        return discord.utils.find(
+            lambda role: normalise_role_name(role.name) == wanted,
+            guild.roles,
         )
 
     def staff_overwrites(self, guild: discord.Guild) -> dict[discord.Role, discord.PermissionOverwrite]:
@@ -439,14 +475,16 @@ class Tickets(commands.Cog):
                 ephemeral=True,
             )
             return
-        category = self.ticket_category(interaction.guild)
+        category_name = TICKET_CATEGORY_NAMES[ticket_type]
+        category = self.ticket_category(interaction.guild, ticket_type)
         if category is None:
             category = await interaction.guild.create_category(
-                TICKET_CATEGORY_NAME,
-                reason="Density SMP ticket system setup",
+                category_name,
+                reason=f"Density SMP {category_name} setup",
             )
 
         bot_member = interaction.guild.me
+        staff_ping_role = self.staff_ping_role(interaction.guild)
         overwrites: dict[discord.abc.Snowflake, discord.PermissionOverwrite] = {
             interaction.guild.default_role: discord.PermissionOverwrite(view_channel=False),
             interaction.user: discord.PermissionOverwrite(
@@ -458,6 +496,20 @@ class Tickets(commands.Cog):
             ),
             **self.staff_overwrites(interaction.guild),
         }
+        if staff_ping_role:
+            overwrites[staff_ping_role] = discord.PermissionOverwrite(
+                view_channel=True,
+                send_messages=True,
+                read_message_history=True,
+                attach_files=True,
+                embed_links=True,
+            )
+        else:
+            log.warning(
+                "Could not find the %r role in %s; ticket staff ping was skipped",
+                TICKET_STAFF_PING_ROLE,
+                interaction.guild.name,
+            )
         if bot_member:
             overwrites[bot_member] = discord.PermissionOverwrite(
                 view_channel=True,
@@ -500,11 +552,20 @@ class Tickets(commands.Cog):
                 ),
                 inline=False,
             )
+        ping_content = interaction.user.mention
+        allowed_roles: list[discord.Role] = []
+        if staff_ping_role:
+            ping_content = f"{staff_ping_role.mention} {ping_content}"
+            allowed_roles.append(staff_ping_role)
         await channel.send(
-            content=interaction.user.mention,
+            content=ping_content,
             embed=embed,
             view=CloseTicketView(self),
-            allowed_mentions=discord.AllowedMentions(users=[interaction.user], roles=False, everyone=False),
+            allowed_mentions=discord.AllowedMentions(
+                users=[interaction.user],
+                roles=allowed_roles,
+                everyone=False,
+            ),
         )
         await self.file_ticket_opened(channel, interaction.user, ticket_type)
         await interaction.followup.send(f"Your ticket is ready: {channel.mention}", ephemeral=True)
@@ -516,7 +577,8 @@ class Tickets(commands.Cog):
                 "Choose the option below that best matches what you need.\n\n"
                 "❓ **Support** — Help with Density SMP\n"
                 "🤝 **Partnerships** — Partnership enquiries\n"
-                "🛠️ **Bug Report** — Report a problem"
+                "🛠️ **Bug Report** — Report a problem\n"
+                "🎉 **Giveaway** — Get help with a giveaway"
             ),
             color=discord.Color.blurple(),
         )
@@ -539,6 +601,10 @@ class Tickets(commands.Cog):
                         if message.author.id != self.bot.user.id:
                             continue
                         if any(embed.footer and embed.footer.text == PANEL_MARKER for embed in message.embeds):
+                            await message.edit(
+                                embed=self.panel_embed(),
+                                view=TicketPanelView(self),
+                            )
                             found = True
                             break
                 except discord.HTTPException:
