@@ -53,6 +53,9 @@ class StarterBot(commands.Bot):
             "cogs.giveaways",
             "cogs.tickets",
             "cogs.welcome",
+            "cogs.levels",
+            "cogs.updates",
+            "cogs.social_links",
         ):
             await self.load_extension(extension)
 
