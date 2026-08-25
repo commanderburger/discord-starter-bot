@@ -280,6 +280,23 @@ class GiveawayView(discord.ui.View):
         await self.cog.handle_claim_button(interaction)
 
 
+class GiveawayClaimModal(discord.ui.Modal, title="Claim your giveaway prize"):
+    ign = discord.ui.TextInput(
+        label="Minecraft IGN",
+        placeholder="Enter your exact in-game name",
+        min_length=1,
+        max_length=32,
+    )
+
+    def __init__(self, cog: "Giveaways", message_id: str) -> None:
+        super().__init__()
+        self.cog = cog
+        self.message_id = message_id
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await self.cog.handle_claim_submission(interaction, self.message_id, str(self.ign).strip())
+
+
 class Giveaways(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
@@ -377,28 +394,81 @@ class Giveaways(commands.Cog):
             await interaction.response.send_message("I could not identify this giveaway.", ephemeral=True)
             return
         message_id = str(interaction.message.id)
+        entry = load_data().get("giveaways", {}).get(message_id)
+        if not isinstance(entry, dict) or not entry.get("ended"):
+            await interaction.response.send_message("This prize is not ready to claim yet.", ephemeral=True)
+            return
+        winner_ids = [int(user_id) for user_id in entry.get("winners", [])]
+        if interaction.user.id not in winner_ids:
+            await interaction.response.send_message("Only a selected winner can claim this prize.", ephemeral=True)
+            return
+        if interaction.user.id in [int(user_id) for user_id in entry.get("claims", [])]:
+            await interaction.response.send_message("You have already claimed this prize.", ephemeral=True)
+            return
+        await interaction.response.send_modal(GiveawayClaimModal(self, message_id))
+
+    async def handle_claim_submission(
+        self,
+        interaction: discord.Interaction,
+        message_id: str,
+        ign: str,
+    ) -> None:
+        if interaction.guild is None or not isinstance(interaction.user, discord.Member):
+            await interaction.response.send_message("Use this claim button in the server.", ephemeral=True)
+            return
+        entry = load_data().get("giveaways", {}).get(message_id)
+        if not isinstance(entry, dict) or not entry.get("ended"):
+            await interaction.response.send_message("This prize is not ready to claim yet.", ephemeral=True)
+            return
+        if interaction.user.id not in [int(user_id) for user_id in entry.get("winners", [])]:
+            await interaction.response.send_message("Only a selected winner can claim this prize.", ephemeral=True)
+            return
+        if interaction.user.id in [int(user_id) for user_id in entry.get("claims", [])]:
+            await interaction.response.send_message("You have already claimed this prize.", ephemeral=True)
+            return
+        tickets = self.bot.get_cog("Tickets")
+        if tickets is None or not hasattr(tickets, "create_giveaway_claim_ticket"):
+            await interaction.response.send_message("The ticket system is unavailable; please contact staff.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            claim_channel = await tickets.create_giveaway_claim_ticket(
+                interaction.guild,
+                interaction.user,
+                message_id=message_id,
+                giveaway_id=str(entry.get("giveaway_id", message_id[-8:])),
+                prize=str(entry.get("prize", "Giveaway prize")),
+                ign=ign,
+            )
+        except (discord.Forbidden, discord.HTTPException, RuntimeError) as error:
+            await interaction.followup.send(f"I could not create your claim ticket: {error}", ephemeral=True)
+            return
         async with self.data_lock:
             data = load_data()
-            entry = data.get("giveaways", {}).get(message_id)
-            if not isinstance(entry, dict) or not entry.get("ended"):
-                await interaction.response.send_message("This prize is not ready to claim yet.", ephemeral=True)
+            current = data.get("giveaways", {}).get(message_id)
+            if not isinstance(current, dict):
+                await interaction.followup.send("The giveaway record disappeared; contact staff.", ephemeral=True)
                 return
-            winner_ids = [int(user_id) for user_id in entry.get("winners", [])]
-            if interaction.user.id not in winner_ids:
-                await interaction.response.send_message("Only a selected winner can claim this prize.", ephemeral=True)
-                return
-            claims = entry.setdefault("claims", [])
-            if interaction.user.id in claims:
-                await interaction.response.send_message("You have already claimed this prize.", ephemeral=True)
-                return
-            claims.append(interaction.user.id)
-            entry["claimed_at"] = int(datetime.now(UTC).timestamp())
+            claims = current.setdefault("claims", [])
+            if interaction.user.id not in claims:
+                claims.append(interaction.user.id)
+            current.setdefault("claim_details", {})[str(interaction.user.id)] = {
+                "ign": ign,
+                "ticket_channel_id": claim_channel.id,
+                "claimed_at": int(datetime.now(UTC).timestamp()),
+            }
             await self.save(data)
-            embed = self.build_giveaway_embed(entry)
-            view = self.build_giveaway_view(entry)
-        await interaction.response.edit_message(embed=embed, view=view)
+            embed = self.build_giveaway_embed(current)
+            view = self.build_giveaway_view(current)
+        channel = self.bot.get_channel(int(entry.get("channel_id", 0)))
+        if isinstance(channel, discord.TextChannel):
+            try:
+                message = await channel.fetch_message(int(message_id))
+                await message.edit(embed=embed, view=view)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                pass
         await interaction.followup.send(
-            "Prize claimed! A staff member can now arrange your reward.",
+            f"Prize claim submitted for IGN `{ign}`. Your private ticket is {claim_channel.mention}.",
             ephemeral=True,
         )
 
@@ -410,6 +480,7 @@ class Giveaways(commands.Cog):
         duration_seconds: int,
         winner_count: int,
         schedule_id: str | None = None,
+        giveaway_type: str | None = None,
     ) -> tuple[discord.Message, bool]:
         ends_at = int(datetime.now(UTC).timestamp()) + duration_seconds
         entry = {
@@ -422,7 +493,7 @@ class Giveaways(commands.Cog):
             "ended": False,
             "schedule_id": schedule_id,
             "giveaway_id": str(uuid.uuid4().int)[-8:],
-            "type": "Automatic" if schedule_id else "Default",
+            "type": giveaway_type or ("Automatic" if schedule_id else "Default"),
             "entries": [],
             "winners": [],
             "claims": [],
@@ -502,6 +573,39 @@ class Giveaways(commands.Cog):
             return f"Rerolled the giveaway. Winner(s): {winner_text}"
         return f"Ended the giveaway. Winner(s): {winner_text}"
 
+    async def edit_giveaway(
+        self,
+        message_id: str,
+        duration_seconds: int,
+        winner_count: int,
+        prize: str,
+    ) -> str:
+        if not 1 <= winner_count <= 20:
+            return "Winners must be a whole number from 1 to 20."
+        async with self.data_lock:
+            data = load_data()
+            entry = data.get("giveaways", {}).get(str(message_id))
+            if not isinstance(entry, dict):
+                return "I could not find that giveaway."
+            if entry.get("ended"):
+                return "Ended giveaways cannot be edited. Reroll them instead."
+            entry["prize"] = prize[:250]
+            entry["winner_count"] = winner_count
+            entry["ends_at"] = int(datetime.now(UTC).timestamp()) + duration_seconds
+            await self.save(data)
+            embed = self.build_giveaway_embed(entry)
+            view = self.build_giveaway_view(entry)
+            channel_id = int(entry.get("channel_id", 0))
+        channel = self.bot.get_channel(channel_id)
+        if not isinstance(channel, discord.TextChannel):
+            return "The giveaway channel no longer exists."
+        try:
+            message = await channel.fetch_message(int(message_id))
+            await message.edit(embed=embed, view=view)
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            return "I could not edit that giveaway message."
+        return f"Giveaway updated: {message.jump_url}"
+
     @app_commands.command(name="gcreate", description="Create a button-entry giveaway")
     @staff_only("manage_guild")
     async def gcreate(self, interaction: discord.Interaction) -> None:
@@ -535,6 +639,7 @@ class Giveaways(commands.Cog):
         duration_seconds: int,
         prize: str,
         winner_count: int,
+        next_at: int | None = None,
     ) -> None:
         async with self.data_lock:
             data = load_data()
@@ -546,7 +651,7 @@ class Giveaways(commands.Cog):
                 "duration_seconds": duration_seconds,
                 "prize": prize[:250],
                 "winner_count": winner_count,
-                "next_at": int(datetime.now(UTC).timestamp()),
+                "next_at": next_at if next_at is not None else int(datetime.now(UTC).timestamp()),
                 "active": True,
             }
             await self.save(data)

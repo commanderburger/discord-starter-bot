@@ -570,6 +570,96 @@ class Tickets(commands.Cog):
         await self.file_ticket_opened(channel, interaction.user, ticket_type)
         await interaction.followup.send(f"Your ticket is ready: {channel.mention}", ephemeral=True)
 
+    async def create_giveaway_claim_ticket(
+        self,
+        guild: discord.Guild,
+        winner: discord.Member,
+        *,
+        message_id: str,
+        giveaway_id: str,
+        prize: str,
+        ign: str,
+    ) -> discord.TextChannel:
+        existing = discord.utils.find(
+            lambda item: isinstance(item, discord.TextChannel)
+            and f"density-giveaway-message:{message_id}" in (item.topic or ""),
+            guild.channels,
+        )
+        if existing:
+            return existing
+        if self.ticket_log_channel(guild, "giveaway") is None:
+            raise RuntimeError(f"#{TICKET_LOG_CHANNELS['giveaway']} is missing")
+        category = self.ticket_category(guild, "giveaway")
+        if category is None:
+            category = await guild.create_category(
+                TICKET_CATEGORY_NAMES["giveaway"],
+                reason="Density SMP giveaway claim tickets",
+            )
+        ping_role = self.staff_ping_role(guild)
+        overwrites: dict[discord.abc.Snowflake, discord.PermissionOverwrite] = {
+            guild.default_role: discord.PermissionOverwrite(view_channel=False),
+            winner: discord.PermissionOverwrite(
+                view_channel=True,
+                send_messages=True,
+                read_message_history=True,
+                attach_files=True,
+                embed_links=True,
+            ),
+            **self.staff_overwrites(guild),
+        }
+        if ping_role:
+            overwrites[ping_role] = discord.PermissionOverwrite(
+                view_channel=True,
+                send_messages=True,
+                read_message_history=True,
+                attach_files=True,
+                embed_links=True,
+            )
+        if guild.me:
+            overwrites[guild.me] = discord.PermissionOverwrite(
+                view_channel=True,
+                send_messages=True,
+                read_message_history=True,
+                manage_channels=True,
+                manage_messages=True,
+                attach_files=True,
+                embed_links=True,
+            )
+        channel = await guild.create_text_channel(
+            f"giveaway-claim-{safe_channel_name(winner.display_name)}"[:100],
+            category=category,
+            topic=(
+                f"density-ticket-owner:{winner.id} density-ticket-type:giveaway "
+                f"density-ticket-open:true density-giveaway-message:{message_id}"
+            ),
+            overwrites=overwrites,
+            reason=f"Giveaway prize claim by {winner}",
+        )
+        embed = discord.Embed(
+            title="🎉 Giveaway prize claim",
+            description=(
+                f"**Winner:** {winner.mention}\n"
+                f"**Minecraft IGN:** `{ign}`\n"
+                f"**Prize:** {prize}\n"
+                f"**Giveaway ID:** `{giveaway_id}`\n\n"
+                "Staff can arrange the prize here. Close the ticket when it has been delivered."
+            ),
+            color=discord.Color.blurple(),
+        )
+        ping_content = winner.mention
+        roles: list[discord.Role] = []
+        if ping_role:
+            ping_content = f"{ping_role.mention} {ping_content}"
+            roles.append(ping_role)
+        await channel.send(
+            content=ping_content,
+            embed=embed,
+            view=CloseTicketView(self),
+            allowed_mentions=discord.AllowedMentions(users=[winner], roles=roles, everyone=False),
+        )
+        await self.file_ticket_opened(channel, winner, "giveaway")
+        return channel
+
     def panel_embed(self) -> discord.Embed:
         embed = discord.Embed(
             title="Tickets",
