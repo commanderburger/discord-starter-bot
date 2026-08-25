@@ -37,9 +37,11 @@ class StarterBot(commands.Bot):
         # Required for the welcome message when a member joins.
         intents.members = True
         super().__init__(
-            command_prefix=commands.when_mentioned,
+            command_prefix=commands.when_mentioned_or("!"),
             intents=intents,
             tree_cls=StarterCommandTree,
+            case_insensitive=True,
+            strip_after_prefix=True,
         )
 
     async def setup_hook(self) -> None:
@@ -56,6 +58,8 @@ class StarterBot(commands.Bot):
             "cogs.levels",
             "cogs.updates",
             "cogs.social_links",
+            "cogs.staff_tools",
+            "cogs.staff_guide",
         ):
             await self.load_extension(extension)
 

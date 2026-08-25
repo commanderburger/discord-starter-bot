@@ -11,9 +11,17 @@ A modular Python Discord bot with moderation, Minecraft status, spawner economy 
 - `/calc` uses DonutSpawners rates, stacking efficiency, and the live Density order book.
 - `/spawner count` lists live server-wide stacked totals and placed blocks by type.
 - `/help`, `/serverinfo`, `/userinfo`, `/avatar`, `/coinflip`, and `/roll`.
-- Persistent Density SMP ticket panel with Support, Partnerships and Bug Report tickets.
+- Persistent Density SMP ticket panel with Support, Partnerships, Bug Report and Giveaway tickets.
+- New tickets ping `@Staff Team`; Support, Bug Report and Giveaway tickets are filed under `Support Tickets`, while Partnership tickets are filed under `Partnership Requests`.
+- Arcane-style chat XP with `/rank`, `/leaderboard`, and level-up posts in `#special-ranks`.
+- One-time release notes in `#bot-updates`, with the channel created automatically if needed.
+- One-time Density SMP YouTube and TikTok posts in the existing `#links` channel.
 - Automatic welcome messages in the `welcome` or `welcom` channel.
-- Form-based `/gcreate` and `/autogcreate` giveaway setup with automatic `@giveaway ping` mentions.
+- Form-based `/gcreate` and `/autogcreate` giveaway setup with entry/claim buttons, live entry counts, winner cards, and automatic `@giveaway ping` mentions.
+- Full `!` staff suite for ticket claiming/closing, payment tracking, moderation, records, embeds, giveaways and quickdrops.
+- An automatically maintained complete guide in the staff-only `#staff-commands` channel.
+- A persistent activity check in `#staff-activity` every five days. Eligible staff have 24 hours to react; missed checks are struck and logged in `#staff-punishments`.
+- Giveaway winners enter their Minecraft IGN and receive a private prize-claim ticket.
 - Private `/api` controls for the server owner and `Owner`/`Manager` roles.
 
 ## 1. Create the Discord application
@@ -77,10 +85,22 @@ Recent SCALE releases use Docker for Apps. The bot needs a small private `/data`
    - `MINECRAFT_SERVER` = the address players use, such as `play.example.net:25565`
    - `MINECRAFT_EDITION` = `java` or `bedrock`
    - `INVITE_EXEMPT_CHANNELS` = `partners,announcements,our-ad`
-   - `STAFF_ROLE_NAMES` = `Owner,Co Owner,Manager,Admin,Moderator,Staff,Support`
+   - `STAFF_ROLE_NAMES` = `Owner,Co Owner,Manager,Admin,Moderator,Staff,Support,Helper,Helpers,Partner Manager,Partner Managers`
    - `SENIOR_ROLE_NAMES` = `Owner,Co Owner,Manager`
    - `GIVEAWAY_PING_ROLE` = `giveaway ping`
    - `TICKET_CHANNEL_NAMES` = `ticket,tickets`
+   - `TICKET_SUPPORT_CATEGORY_NAME` = `Support Tickets`
+   - `TICKET_PARTNERSHIP_CATEGORY_NAME` = `Partnership Requests`
+   - `TICKET_STAFF_PING_ROLE` = `Staff Team`
+   - `SPECIAL_RANKS_CHANNEL` = `special-ranks`
+   - `BOT_UPDATES_CHANNEL` = `bot-updates`
+   - `SOCIAL_LINKS_CHANNEL` = `links`
+   - `STAFF_COMMANDS_CHANNEL` = `staff-commands`
+   - `STAFF_ACTIVITY_CHANNEL` = `staff-activity`
+   - `STAFF_PUNISHMENTS_CHANNEL` = `staff-punishments`
+   - `STAFF_ACTIVITY_PING_ROLE` = `Staff Team`
+   - `BOT_TIMEZONE` = `Europe/London`
+   - `DONUT_API_KEY` = the private key created with `/api` in DonutSMP (needed only for `!stats IGN`)
    - `WELCOME_CHANNEL_NAMES` = `welcome,welcom`
    - `API_ALLOWED_ROLES` = `Owner,Manager`
    - `TEST_GUILD_ID` = your server ID (optional)
@@ -129,10 +149,16 @@ The Discord server owner is always authorized. Members with a role named `Owner`
 - `/farm bamboo` calculates live bamboo profit per hour.
 - `/auction browse` shows current listings; `/auction track` draws a bought/sold trading-volume graph.
 - `/mute`, `/tempmute`, `/unmute`, `/purge`, `/warn`, `/warnings`, and `/clearwarnings` are available to configured staff roles. `/ban` and `/kick` are restricted to Manager, Co-Owner, Owner and the Discord server owner.
-- `/gcreate` and `/autogcreate` open private forms. New giveaways ping `@giveaway ping`; no role is required to enter.
+- `/gcreate` and `/autogcreate` open private forms. New giveaways ping `@giveaway ping`; members enter with the button and selected winners can use **Claim Prize** after the giveaway ends.
 - `/gend`, `/greroll`, `/autoglist`, and `/autogstop` manage giveaways after creation.
-- The bot posts its own ticket selector in the ticket channel and creates private Support, Partnerships and Bug Report channels.
+- The bot posts its own ticket selector in the ticket channel and creates private Support, Partnerships, Bug Report and Giveaway channels. New tickets ping `@Staff Team`; Support, Bug Report and Giveaway tickets go under `Support Tickets`, and Partnership tickets go under `Partnership Requests`.
 - New members are welcomed in the welcome channel with their current member number.
+
+### Staff `!` commands
+
+The bot accepts `!` commands as well as slash commands. It creates and maintains a complete grouped guide in `#staff-commands` after startup. Regular configured staff roles can use operational ticket, timeout, channel, utility, embed and giveaway tools. Only Owner, Co Owner, Manager and the Discord server owner can run `!ban`, `!kick`, `!strike`, `!unstrike`, `!clearstrikes`, `!strikelb`, `!refresh`, `/point remove`, and `!manage`.
+
+The five-day activity schedule and its open 24-hour reaction window are kept in `/data/staff-tools.json`, so restarting or updating the TrueNAS container does not reset the clock. Automatic and manual strike actions are logged in the staff-only `#staff-punishments` channel.
 
 Giveaways and warnings are saved under `/data`, so the existing TrueNAS `/data` storage mount keeps them after updates and restarts.
 
