@@ -10,7 +10,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from cogs.permissions import StaffOnly, staff_only
+from cogs.permissions import SeniorStaffOnly, StaffOnly, senior_only, staff_only
 
 
 log = logging.getLogger("starter-bot.moderation")
@@ -136,7 +136,7 @@ class Moderation(commands.Cog):
             await self.check_message(after)
 
     @app_commands.command(name="ban", description="Ban a member from the server")
-    @staff_only("ban_members")
+    @senior_only()
     async def ban(self, interaction: discord.Interaction, member: discord.Member, reason: str = "No reason provided") -> None:
         if error := self.target_allowed(interaction, member):
             await interaction.response.send_message(error, ephemeral=True)
@@ -146,7 +146,7 @@ class Moderation(commands.Cog):
         await self.send_mod_log(interaction.guild, "Member banned", f"{member} was banned by {interaction.user.mention}.\nReason: {reason}")
 
     @app_commands.command(name="kick", description="Kick a member from the server")
-    @staff_only("kick_members")
+    @senior_only()
     async def kick(self, interaction: discord.Interaction, member: discord.Member, reason: str = "No reason provided") -> None:
         if error := self.target_allowed(interaction, member):
             await interaction.response.send_message(error, ephemeral=True)
@@ -232,7 +232,9 @@ class Moderation(commands.Cog):
         await interaction.response.send_message(f"Cleared **{removed}** warning(s) for {member.mention}.", ephemeral=True)
 
     async def cog_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError) -> None:
-        if isinstance(error, (StaffOnly, app_commands.MissingPermissions)):
+        if isinstance(error, SeniorStaffOnly):
+            message = "Only Manager, Co-Owner and Owner roles can kick or ban members."
+        elif isinstance(error, (StaffOnly, app_commands.MissingPermissions)):
             message = "This command is for staff only."
         elif isinstance(error, app_commands.BotMissingPermissions):
             message = "The bot is missing the required Discord permission."

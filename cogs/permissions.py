@@ -1,19 +1,51 @@
 import os
+import re
 
 import discord
 from discord import app_commands
 
 
-DEFAULT_STAFF_ROLES = "Owner,Manager,Administrator,Admin,Moderator,Mod,Staff"
+DEFAULT_STAFF_ROLES = (
+    "Owner,Co Owner,Co-Owner,Manager,Administrator,Admin,"
+    "Senior Moderator,Senior Mod,Moderator,Mod,Trial Moderator,Trial Mod,"
+    "Support,Support Team,Helper,Staff"
+)
+DEFAULT_SENIOR_ROLES = "Owner,Co Owner,Co-Owner,Manager"
 
 
 class StaffOnly(app_commands.CheckFailure):
     """Raised when a member tries to use a staff-only command."""
 
 
+class SeniorStaffOnly(app_commands.CheckFailure):
+    """Raised when a member tries to use a senior-management command."""
+
+
+def normalise_role_name(name: str) -> str:
+    """Make role matching tolerant of spaces, hyphens and capitalisation."""
+
+    return re.sub(r"[^a-z0-9]", "", name.casefold())
+
+
+def configured_role_names(variable: str, default: str) -> set[str]:
+    configured = os.getenv(variable, default)
+    return {
+        normalise_role_name(name)
+        for name in configured.split(",")
+        if normalise_role_name(name)
+    }
+
+
 def staff_role_names() -> set[str]:
-    configured = os.getenv("STAFF_ROLE_NAMES", DEFAULT_STAFF_ROLES)
-    return {name.strip().casefold() for name in configured.split(",") if name.strip()}
+    return configured_role_names("STAFF_ROLE_NAMES", DEFAULT_STAFF_ROLES)
+
+
+def senior_role_names() -> set[str]:
+    return configured_role_names("SENIOR_ROLE_NAMES", DEFAULT_SENIOR_ROLES)
+
+
+def member_has_named_role(member: discord.Member, names: set[str]) -> bool:
+    return any(normalise_role_name(role.name) in names for role in member.roles)
 
 
 def member_is_staff(interaction: discord.Interaction, permission: str | None = None) -> bool:
@@ -28,8 +60,17 @@ def member_is_staff(interaction: discord.Interaction, permission: str | None = N
     if permission and getattr(permissions, permission, False):
         return True
 
-    allowed_roles = staff_role_names()
-    return any(role.name.casefold() in allowed_roles for role in interaction.user.roles)
+    return member_has_named_role(interaction.user, staff_role_names())
+
+
+def member_is_senior(interaction: discord.Interaction) -> bool:
+    """Allow only the server owner or Owner, Co-Owner and Manager roles."""
+
+    if not interaction.guild or not isinstance(interaction.user, discord.Member):
+        return False
+    if interaction.user.id == interaction.guild.owner_id:
+        return True
+    return member_has_named_role(interaction.user, senior_role_names())
 
 
 def staff_only(permission: str | None = None):
@@ -39,5 +80,16 @@ def staff_only(permission: str | None = None):
         if member_is_staff(interaction, permission):
             return True
         raise StaffOnly()
+
+    return app_commands.check(predicate)
+
+
+def senior_only():
+    """Restrict a command to Manager, Co-Owner, Owner or the server owner."""
+
+    async def predicate(interaction: discord.Interaction) -> bool:
+        if member_is_senior(interaction):
+            return True
+        raise SeniorStaffOnly()
 
     return app_commands.check(predicate)

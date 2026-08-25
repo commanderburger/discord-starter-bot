@@ -63,16 +63,25 @@ class General(commands.Cog):
         embed.add_field(
             name="Giveaways (Staff)",
             value=(
-                "`/gcreate` · `/gend` · `/greroll`\n"
-                "`/autogcreate` · `/autoglist` · `/autogstop`"
+                "`/gcreate` · `/autogcreate` — open setup forms\n"
+                "`/gend` · `/greroll` · `/autoglist` · `/autogstop`"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="Tickets",
+            value=(
+                "Use the menu in the ticket channel for Support, Partnerships or a Bug Report.\n"
+                "`/ticketsetup` — Manager, Co-Owner and Owner only"
             ),
             inline=False,
         )
         embed.add_field(
             name="Moderation (Staff)",
             value=(
-                "`/ban` · `/kick` · `/mute` · `/tempmute` · `/unmute`\n"
-                "`/purge` · `/warn` · `/warnings` · `/clearwarnings`"
+                "`/mute` · `/tempmute` · `/unmute` · `/purge` · `/warn`\n"
+                "`/warnings` · `/clearwarnings`\n"
+                "`/ban` · `/kick` — Manager, Co-Owner and Owner only\n"
             ),
             inline=False,
         )

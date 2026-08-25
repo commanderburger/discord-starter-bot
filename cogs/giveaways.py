@@ -5,20 +5,21 @@ import os
 import random
 import re
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
-from cogs.permissions import StaffOnly, staff_only
+from cogs.permissions import StaffOnly, member_is_staff, normalise_role_name, staff_only
 
 
 log = logging.getLogger("starter-bot.giveaways")
 DATA_FILE = Path(os.getenv("BOT_DATA_DIR", "/data")) / "giveaways.json"
 DURATION_RE = re.compile(r"^(\d+)([smhdw])$", re.IGNORECASE)
 ENTRY_EMOJI = "🎉"
+GIVEAWAY_PING_ROLE = os.getenv("GIVEAWAY_PING_ROLE", "giveaway ping")
 
 
 def parse_duration(value: str) -> int:
@@ -29,6 +30,40 @@ def parse_duration(value: str) -> int:
     if seconds < 10 or seconds > 31_536_000:
         raise ValueError("The time must be between 10 seconds and 1 year.")
     return seconds
+
+
+def parse_winner_count(value: str) -> int:
+    try:
+        winners = int(value.strip())
+    except ValueError as error:
+        raise ValueError("Winners must be a whole number from 1 to 20.") from error
+    if not 1 <= winners <= 20:
+        raise ValueError("Winners must be a whole number from 1 to 20.")
+    return winners
+
+
+def resolve_text_channel(
+    interaction: discord.Interaction,
+    value: str,
+) -> discord.TextChannel | None:
+    if interaction.guild is None:
+        return None
+    raw = value.strip()
+    if not raw:
+        return interaction.channel if isinstance(interaction.channel, discord.TextChannel) else None
+
+    mention = re.fullmatch(r"<#(\d+)>", raw)
+    channel_id = int(mention.group(1)) if mention else int(raw) if raw.isdigit() else None
+    if channel_id:
+        channel = interaction.guild.get_channel(channel_id)
+        return channel if isinstance(channel, discord.TextChannel) else None
+
+    wanted = normalise_role_name(raw.removeprefix("#"))
+    return discord.utils.find(
+        lambda channel: isinstance(channel, discord.TextChannel)
+        and normalise_role_name(channel.name) == wanted,
+        interaction.guild.channels,
+    )
 
 
 def load_data() -> dict:
@@ -53,6 +88,155 @@ def atomic_write(data: dict) -> None:
     temporary.replace(DATA_FILE)
 
 
+class GiveawayCreateModal(discord.ui.Modal, title="Create a giveaway"):
+    prize = discord.ui.TextInput(
+        label="Prize",
+        placeholder="What will the winner receive?",
+        min_length=1,
+        max_length=250,
+    )
+    duration = discord.ui.TextInput(
+        label="Duration",
+        placeholder="Examples: 10m, 2h, 1d",
+        min_length=2,
+        max_length=20,
+    )
+    winners = discord.ui.TextInput(
+        label="Number of winners",
+        default="1",
+        min_length=1,
+        max_length=2,
+    )
+    channel = discord.ui.TextInput(
+        label="Channel (optional)",
+        placeholder="#giveaways, a channel ID, or leave blank for here",
+        required=False,
+        max_length=100,
+    )
+
+    def __init__(self, cog: "Giveaways") -> None:
+        super().__init__()
+        self.cog = cog
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if not member_is_staff(interaction, "manage_guild"):
+            await interaction.response.send_message("This command is for staff only.", ephemeral=True)
+            return
+        try:
+            seconds = parse_duration(str(self.duration))
+            winner_count = parse_winner_count(str(self.winners))
+        except ValueError as error:
+            await interaction.response.send_message(str(error), ephemeral=True)
+            return
+        target = resolve_text_channel(interaction, str(self.channel))
+        if target is None:
+            await interaction.response.send_message(
+                "I could not find that text channel. Use a channel mention, ID or exact name.",
+                ephemeral=True,
+            )
+            return
+        await interaction.response.defer(ephemeral=True)
+        message, pinged = await self.cog.create_giveaway(
+            target,
+            interaction.user.id,
+            str(self.prize),
+            seconds,
+            winner_count,
+        )
+        note = "" if pinged else f" I could not find the `{GIVEAWAY_PING_ROLE}` role to ping."
+        await interaction.followup.send(
+            f"Giveaway created: {message.jump_url}.{note}",
+            ephemeral=True,
+        )
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception) -> None:
+        log.exception("Giveaway form failed", exc_info=error)
+        message = "I could not create that giveaway. Check my channel permissions and try again."
+        if interaction.response.is_done():
+            await interaction.followup.send(message, ephemeral=True)
+        else:
+            await interaction.response.send_message(message, ephemeral=True)
+
+
+class AutoGiveawayCreateModal(discord.ui.Modal, title="Create an automatic giveaway"):
+    prize = discord.ui.TextInput(
+        label="Prize",
+        placeholder="What will each winner receive?",
+        min_length=1,
+        max_length=250,
+    )
+    interval = discord.ui.TextInput(
+        label="Time between giveaways",
+        placeholder="Examples: 12h, 1d, 1w",
+        min_length=2,
+        max_length=20,
+    )
+    giveaway_duration = discord.ui.TextInput(
+        label="How long each giveaway runs",
+        placeholder="Examples: 30m, 2h, 1d",
+        min_length=2,
+        max_length=20,
+    )
+    winners = discord.ui.TextInput(
+        label="Number of winners",
+        default="1",
+        min_length=1,
+        max_length=2,
+    )
+    channel = discord.ui.TextInput(
+        label="Channel (optional)",
+        placeholder="#giveaways, a channel ID, or leave blank for here",
+        required=False,
+        max_length=100,
+    )
+
+    def __init__(self, cog: "Giveaways") -> None:
+        super().__init__()
+        self.cog = cog
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if not member_is_staff(interaction, "manage_guild"):
+            await interaction.response.send_message("This command is for staff only.", ephemeral=True)
+            return
+        try:
+            interval_seconds = parse_duration(str(self.interval))
+            duration_seconds = parse_duration(str(self.giveaway_duration))
+            winner_count = parse_winner_count(str(self.winners))
+        except ValueError as error:
+            await interaction.response.send_message(str(error), ephemeral=True)
+            return
+        target = resolve_text_channel(interaction, str(self.channel))
+        if target is None:
+            await interaction.response.send_message(
+                "I could not find that text channel. Use a channel mention, ID or exact name.",
+                ephemeral=True,
+            )
+            return
+        schedule_id = uuid.uuid4().hex[:8]
+        await self.cog.save_auto_schedule(
+            schedule_id=schedule_id,
+            guild_id=interaction.guild_id,
+            channel_id=target.id,
+            host_id=interaction.user.id,
+            interval_seconds=interval_seconds,
+            duration_seconds=duration_seconds,
+            prize=str(self.prize),
+            winner_count=winner_count,
+        )
+        await interaction.response.send_message(
+            f"Auto giveaway schedule `{schedule_id}` saved. The first one will post shortly in {target.mention}.",
+            ephemeral=True,
+        )
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception) -> None:
+        log.exception("Automatic giveaway form failed", exc_info=error)
+        message = "I could not save that automatic giveaway. Please try again."
+        if interaction.response.is_done():
+            await interaction.followup.send(message, ephemeral=True)
+        else:
+            await interaction.response.send_message(message, ephemeral=True)
+
+
 class Giveaways(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
@@ -72,9 +256,8 @@ class Giveaways(commands.Cog):
         prize: str,
         duration_seconds: int,
         winner_count: int,
-        required_role_id: int | None,
         schedule_id: str | None = None,
-    ) -> discord.Message:
+    ) -> tuple[discord.Message, bool]:
         ends_at = int(datetime.now(UTC).timestamp()) + duration_seconds
         embed = discord.Embed(
             title=f"🎉 {prize}",
@@ -86,9 +269,20 @@ class Giveaways(commands.Cog):
             ),
             color=discord.Color.magenta(),
         )
-        if required_role_id:
-            embed.add_field(name="Required role", value=f"<@&{required_role_id}>", inline=False)
-        message = await channel.send(embed=embed)
+        ping_role = discord.utils.find(
+            lambda role: normalise_role_name(role.name) == normalise_role_name(GIVEAWAY_PING_ROLE),
+            channel.guild.roles,
+        )
+        allowed_mentions = discord.AllowedMentions(
+            everyone=False,
+            users=False,
+            roles=[ping_role] if ping_role else False,
+        )
+        message = await channel.send(
+            content=ping_role.mention if ping_role else None,
+            embed=embed,
+            allowed_mentions=allowed_mentions,
+        )
         await message.add_reaction(ENTRY_EMOJI)
         async with self.data_lock:
             data = load_data()
@@ -98,15 +292,14 @@ class Giveaways(commands.Cog):
                 "host_id": host_id,
                 "prize": prize[:250],
                 "winner_count": winner_count,
-                "required_role_id": required_role_id,
                 "ends_at": ends_at,
                 "ended": False,
                 "schedule_id": schedule_id,
             }
             await self.save(data)
-        return message
+        return message, ping_role is not None
 
-    async def eligible_users(self, message: discord.Message, required_role_id: int | None) -> list[discord.Member]:
+    async def eligible_users(self, message: discord.Message) -> list[discord.Member]:
         reaction = discord.utils.find(lambda item: str(item.emoji) == ENTRY_EMOJI, message.reactions)
         if reaction is None:
             return []
@@ -116,8 +309,6 @@ class Giveaways(commands.Cog):
                 continue
             member = message.guild.get_member(user.id) if message.guild else None
             if member is None:
-                continue
-            if required_role_id and all(role.id != required_role_id for role in member.roles):
                 continue
             users.append(member)
         return users
@@ -134,7 +325,7 @@ class Giveaways(commands.Cog):
             message = await channel.fetch_message(int(message_id))
         except (discord.NotFound, discord.Forbidden, discord.HTTPException):
             return "I could not access that giveaway message."
-        users = await self.eligible_users(message, entry.get("required_role_id"))
+        users = await self.eligible_users(message)
         count = min(max(1, int(entry.get("winner_count", 1))), len(users))
         winners = random.sample(users, count) if count else []
         winner_text = ", ".join(user.mention for user in winners) if winners else "No valid entries"
@@ -159,29 +350,9 @@ class Giveaways(commands.Cog):
         return f"Ended the giveaway. Winner(s): {winner_text}"
 
     @app_commands.command(name="gcreate", description="Create a reaction giveaway")
-    @app_commands.describe(duration="Examples: 10m, 2h, 1d", prize="What the winner receives")
     @staff_only("manage_guild")
-    async def gcreate(
-        self,
-        interaction: discord.Interaction,
-        duration: str,
-        prize: str,
-        winners: app_commands.Range[int, 1, 20] = 1,
-        channel: discord.TextChannel | None = None,
-        required_role: discord.Role | None = None,
-    ) -> None:
-        try:
-            seconds = parse_duration(duration)
-        except ValueError as error:
-            await interaction.response.send_message(str(error), ephemeral=True)
-            return
-        target = channel or interaction.channel
-        if not isinstance(target, discord.TextChannel):
-            await interaction.response.send_message("Choose a normal text channel.", ephemeral=True)
-            return
-        await interaction.response.defer(ephemeral=True)
-        message = await self.create_giveaway(target, interaction.user.id, prize, seconds, winners, required_role.id if required_role else None)
-        await interaction.followup.send(f"Giveaway created: {message.jump_url}", ephemeral=True)
+    async def gcreate(self, interaction: discord.Interaction) -> None:
+        await interaction.response.send_modal(GiveawayCreateModal(self))
 
     @app_commands.command(name="gend", description="End a giveaway now")
     @staff_only("manage_guild")
@@ -196,41 +367,36 @@ class Giveaways(commands.Cog):
         await interaction.followup.send(await self.end_giveaway(message_id, reroll=True), ephemeral=True)
 
     @app_commands.command(name="autogcreate", description="Schedule giveaways to repeat automatically")
-    @app_commands.describe(interval="Time between giveaways", giveaway_duration="How long each giveaway stays open")
     @staff_only("manage_guild")
-    async def autogcreate(
+    async def autogcreate(self, interaction: discord.Interaction) -> None:
+        await interaction.response.send_modal(AutoGiveawayCreateModal(self))
+
+    async def save_auto_schedule(
         self,
-        interaction: discord.Interaction,
-        channel: discord.TextChannel,
-        interval: str,
-        giveaway_duration: str,
+        *,
+        schedule_id: str,
+        guild_id: int | None,
+        channel_id: int,
+        host_id: int,
+        interval_seconds: int,
+        duration_seconds: int,
         prize: str,
-        winners: app_commands.Range[int, 1, 20] = 1,
-        required_role: discord.Role | None = None,
+        winner_count: int,
     ) -> None:
-        try:
-            interval_seconds = parse_duration(interval)
-            duration_seconds = parse_duration(giveaway_duration)
-        except ValueError as error:
-            await interaction.response.send_message(str(error), ephemeral=True)
-            return
-        schedule_id = uuid.uuid4().hex[:8]
         async with self.data_lock:
             data = load_data()
             data["auto"][schedule_id] = {
-                "guild_id": interaction.guild_id,
-                "channel_id": channel.id,
-                "host_id": interaction.user.id,
+                "guild_id": guild_id,
+                "channel_id": channel_id,
+                "host_id": host_id,
                 "interval_seconds": interval_seconds,
                 "duration_seconds": duration_seconds,
                 "prize": prize[:250],
-                "winner_count": winners,
-                "required_role_id": required_role.id if required_role else None,
+                "winner_count": winner_count,
                 "next_at": int(datetime.now(UTC).timestamp()),
                 "active": True,
             }
             await self.save(data)
-        await interaction.response.send_message(f"Auto giveaway schedule `{schedule_id}` saved. The first one will post shortly.", ephemeral=True)
 
     @app_commands.command(name="autoglist", description="List automatic giveaway schedules")
     @staff_only("manage_guild")
@@ -292,7 +458,6 @@ class Giveaways(commands.Cog):
                         str(entry.get("prize", "Giveaway")),
                         int(entry.get("duration_seconds", 3600)),
                         int(entry.get("winner_count", 1)),
-                        entry.get("required_role_id"),
                         schedule_id,
                     )
                 except discord.HTTPException:
