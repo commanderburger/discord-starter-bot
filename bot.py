@@ -2,6 +2,7 @@ import logging
 import os
 
 import discord
+from discord import app_commands
 from discord.ext import commands
 
 
@@ -12,13 +13,34 @@ logging.basicConfig(
 log = logging.getLogger("starter-bot")
 
 
+class StarterCommandTree(app_commands.CommandTree):
+    async def on_error(
+        self,
+        interaction: discord.Interaction,
+        error: app_commands.AppCommandError,
+    ) -> None:
+        log.exception("Application command failed", exc_info=error)
+        # Command/cog-specific handlers have already replied at this point.
+        # Avoid sending a second, confusing error message after their reply.
+        if interaction.response.is_done():
+            return
+        message = "That command could not be completed. Please try again or ask a staff member for help."
+        await interaction.response.send_message(message, ephemeral=True)
+
+
 class StarterBot(commands.Bot):
     def __init__(self) -> None:
         intents = discord.Intents.default()
         # Required for the Discord-invite moderation filter.
         # This must also be enabled on the Bot page in Discord's Developer Portal.
         intents.message_content = True
-        super().__init__(command_prefix=commands.when_mentioned, intents=intents)
+        # Required for the welcome message when a member joins.
+        intents.members = True
+        super().__init__(
+            command_prefix=commands.when_mentioned,
+            intents=intents,
+            tree_cls=StarterCommandTree,
+        )
 
     async def setup_hook(self) -> None:
         for extension in (
@@ -29,6 +51,8 @@ class StarterBot(commands.Bot):
             "cogs.fun",
             "cogs.api_admin",
             "cogs.giveaways",
+            "cogs.tickets",
+            "cogs.welcome",
         ):
             await self.load_extension(extension)
 
@@ -47,6 +71,10 @@ class StarterBot(commands.Bot):
     async def on_ready(self) -> None:
         if self.user:
             log.info("Logged in as %s (ID: %s)", self.user, self.user.id)
+            log.info(
+                "Connected to: %s",
+                ", ".join(f"{guild.name} ({guild.id})" for guild in self.guilds) or "no servers",
+            )
 
 
 def main() -> None:
@@ -58,4 +86,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

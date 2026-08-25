@@ -11,6 +11,9 @@ A modular Python Discord bot with moderation, Minecraft status, spawner economy 
 - `/calc` uses DonutSpawners rates, stacking efficiency, and the live Density order book.
 - `/spawner count` lists live server-wide stacked totals and placed blocks by type.
 - `/help`, `/serverinfo`, `/userinfo`, `/avatar`, `/coinflip`, and `/roll`.
+- Persistent Density SMP ticket panel with Support, Partnerships and Bug Report tickets.
+- Automatic welcome messages in the `welcome` or `welcom` channel.
+- Form-based `/gcreate` and `/autogcreate` giveaway setup with automatic `@giveaway ping` mentions.
 - Private `/api` controls for the server owner and `Owner`/`Manager` roles.
 
 ## 1. Create the Discord application
@@ -18,7 +21,7 @@ A modular Python Discord bot with moderation, Minecraft status, spawner economy 
 1. Open the [Discord Developer Portal](https://discord.com/developers/applications), choose **New Application**, and give it a name.
 2. Open **Bot**, choose **Reset Token**, and copy the token somewhere private. Do not paste it into source code or commit it to Git.
 3. Under **Installation**, enable **Guild Install**. Add the `applications.commands` and `bot` scopes. Give the bot **View Channels**, **Send Messages**, **Embed Links**, **Read Message History**, and **Manage Messages** permissions.
-4. On the **Bot** page, enable **Message Content Intent** under **Privileged Gateway Intents**. The invite filter needs it to inspect messages. Presence Intent and Server Members Intent can remain disabled.
+4. On the **Bot** page, enable **Message Content Intent** and **Server Members Intent** under **Privileged Gateway Intents**. The invite filter needs message content and welcome messages need the members intent. Presence Intent can remain disabled.
 5. Copy the install link, open it, and add the bot to a server you manage.
 6. Optional but useful: in Discord, enable Developer Mode under **User Settings > Advanced**, right-click your server, and choose **Copy Server ID**. Use this as `TEST_GUILD_ID` while developing.
 
@@ -74,6 +77,11 @@ Recent SCALE releases use Docker for Apps. The bot needs a small private `/data`
    - `MINECRAFT_SERVER` = the address players use, such as `play.example.net:25565`
    - `MINECRAFT_EDITION` = `java` or `bedrock`
    - `INVITE_EXEMPT_CHANNELS` = `partners,announcements,our-ad`
+   - `STAFF_ROLE_NAMES` = `Owner,Co Owner,Manager,Admin,Moderator,Staff,Support`
+   - `SENIOR_ROLE_NAMES` = `Owner,Co Owner,Manager`
+   - `GIVEAWAY_PING_ROLE` = `giveaway ping`
+   - `TICKET_CHANNEL_NAMES` = `ticket,tickets`
+   - `WELCOME_CHANNEL_NAMES` = `welcome,welcom`
    - `API_ALLOWED_ROLES` = `Owner,Manager`
    - `TEST_GUILD_ID` = your server ID (optional)
    - `LOG_LEVEL` = `INFO` (optional)
@@ -120,9 +128,11 @@ The Discord server owner is always authorized. Members with a role named `Owner`
 - `/farm pickle` calculates gross and net sea-pickle profit per bone and per hour from the live `/sell` prices.
 - `/farm bamboo` calculates live bamboo profit per hour.
 - `/auction browse` shows current listings; `/auction track` draws a bought/sold trading-volume graph.
-- `/ban`, `/kick`, `/mute`, `/tempmute`, `/unmute`, `/purge`, `/warn`, `/warnings`, and `/clearwarnings` provide permission-checked moderation.
-- `/gcreate`, `/gend`, and `/greroll` manage reaction giveaways.
-- `/autogcreate`, `/autoglist`, and `/autogstop` manage persistent repeating giveaways.
+- `/mute`, `/tempmute`, `/unmute`, `/purge`, `/warn`, `/warnings`, and `/clearwarnings` are available to configured staff roles. `/ban` and `/kick` are restricted to Manager, Co-Owner, Owner and the Discord server owner.
+- `/gcreate` and `/autogcreate` open private forms. New giveaways ping `@giveaway ping`; no role is required to enter.
+- `/gend`, `/greroll`, `/autoglist`, and `/autogstop` manage giveaways after creation.
+- The bot posts its own ticket selector in the ticket channel and creates private Support, Partnerships and Bug Report channels.
+- New members are welcomed in the welcome channel with their current member number.
 
 Giveaways and warnings are saved under `/data`, so the existing TrueNAS `/data` storage mount keeps them after updates and restarts.
 
@@ -185,4 +195,3 @@ Dockerfile                     production container
 compose.yaml                   local Docker testing
 .github/workflows/...          publishes the image to GHCR
 ```
-
