@@ -1,4 +1,5 @@
 import asyncio
+import io
 import logging
 import os
 import re
@@ -25,6 +26,12 @@ TICKET_TYPES = {
     "partnership": ("Partnerships", "🤝", "Tell us about your partnership proposal."),
     "bug": ("Bug Report", "🛠️", "Explain the bug, what you expected and how to reproduce it."),
 }
+TICKET_LOG_CHANNELS = {
+    "support": os.getenv("TICKET_LOG_SUPPORT_CHANNEL", "ticket-logs-support"),
+    "partnership": os.getenv("TICKET_LOG_PARTNERSHIPS_CHANNEL", "ticket-logs-partnerships"),
+    "bug": os.getenv("TICKET_LOG_BUG_REPORT_CHANNEL", "ticket-logs-bug-report"),
+}
+MAX_TRANSCRIPT_BYTES = 7_500_000
 
 
 def safe_channel_name(value: str) -> str:
@@ -35,6 +42,11 @@ def safe_channel_name(value: str) -> str:
 def ticket_owner_id(channel: discord.TextChannel) -> int | None:
     match = re.search(r"density-ticket-owner:(\d+)", channel.topic or "")
     return int(match.group(1)) if match else None
+
+
+def ticket_type_id(channel: discord.TextChannel) -> str | None:
+    match = re.search(r"density-ticket-type:([a-z]+)", channel.topic or "")
+    return match.group(1) if match else None
 
 
 def find_named_text_channel(guild: discord.Guild, configured: str) -> discord.TextChannel | None:
@@ -82,7 +94,63 @@ class TicketTypeSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        await self.cog.create_ticket(interaction, self.values[0])
+        ticket_type = self.values[0]
+        if ticket_type == "bug":
+            await interaction.response.send_modal(BugReportModal(self.cog))
+            return
+        await self.cog.create_ticket(interaction, ticket_type)
+
+
+class BugReportModal(discord.ui.Modal):
+    def __init__(self, cog: "Tickets") -> None:
+        super().__init__(
+            title="Open a bug report",
+            custom_id="density-bug-report-modal-v1",
+        )
+        self.cog = cog
+        self.issue = discord.ui.TextInput(
+            label="What is the issue?",
+            placeholder="Explain the bug and what you expected to happen",
+            style=discord.TextStyle.paragraph,
+            min_length=10,
+            max_length=1000,
+            required=True,
+        )
+        self.ign = discord.ui.TextInput(
+            label="What is your Minecraft IGN?",
+            placeholder="Your exact in-game name",
+            min_length=1,
+            max_length=32,
+            required=True,
+        )
+        self.clip_link = discord.ui.TextInput(
+            label="Clip link (optional)",
+            placeholder="YouTube, Medal, Streamable or another clip link",
+            max_length=500,
+            required=False,
+        )
+        self.add_item(self.issue)
+        self.add_item(self.ign)
+        self.add_item(self.clip_link)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await self.cog.create_ticket(
+            interaction,
+            "bug",
+            answers={
+                "issue": str(self.issue.value).strip(),
+                "ign": str(self.ign.value).strip(),
+                "clip_link": str(self.clip_link.value).strip(),
+            },
+        )
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception) -> None:
+        log.exception("Bug report form failed", exc_info=error)
+        message = "I could not create that bug report. Please try again or contact staff."
+        if interaction.response.is_done():
+            await interaction.followup.send(message, ephemeral=True)
+        else:
+            await interaction.response.send_message(message, ephemeral=True)
 
 
 class TicketPanelView(discord.ui.View):
@@ -137,27 +205,32 @@ class CloseTicketView(discord.ui.View):
             return
 
         await interaction.response.defer(ephemeral=True)
-        owner = interaction.guild.get_member(owner_id) if interaction.guild else None
-        if owner:
-            overwrite = interaction.channel.overwrites_for(owner)
-            overwrite.send_messages = False
-            await interaction.channel.set_permissions(owner, overwrite=overwrite)
-        new_name = interaction.channel.name
-        if not new_name.startswith("closed-"):
-            new_name = f"closed-{new_name}"[:100]
-        await interaction.channel.edit(
-            name=new_name,
-            topic=(interaction.channel.topic or "").replace(
-                "density-ticket-open:true",
-                "density-ticket-open:false",
-            ),
-            reason=f"Ticket closed by {interaction.user}",
+        ticket_type = ticket_type_id(interaction.channel)
+        if interaction.guild is None or ticket_type not in TICKET_TYPES:
+            await interaction.followup.send(
+                "I could not identify this ticket type, so I did not close it.",
+                ephemeral=True,
+            )
+            return
+        try:
+            log_message = await self.cog.file_ticket_log(
+                interaction.channel,
+                owner_id,
+                interaction.user,
+                ticket_type,
+            )
+        except RuntimeError as error:
+            await interaction.followup.send(
+                f"I did not close this ticket: {error}",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.followup.send(
+            f"Ticket transcript filed in {log_message.channel.mention}. Deleting this ticket now.",
+            ephemeral=True,
         )
-        await interaction.channel.send(
-            f"🔒 Ticket closed by {interaction.user.mention}. Staff can review it before deleting it.",
-            allowed_mentions=discord.AllowedMentions(users=False, roles=False, everyone=False),
-        )
-        await interaction.followup.send("Ticket closed.", ephemeral=True)
+        await interaction.channel.delete(reason=f"Ticket closed by {interaction.user}")
 
     async def on_error(
         self,
@@ -203,7 +276,140 @@ class Tickets(commands.Cog):
             if normalise_role_name(role.name) in names
         }
 
-    async def create_ticket(self, interaction: discord.Interaction, ticket_type: str) -> None:
+    def ticket_log_channel(
+        self,
+        guild: discord.Guild,
+        ticket_type: str,
+    ) -> discord.TextChannel | None:
+        channel_name = TICKET_LOG_CHANNELS.get(ticket_type)
+        if channel_name is None:
+            return None
+        wanted = normalise_role_name(channel_name)
+        return discord.utils.find(
+            lambda channel: isinstance(channel, discord.TextChannel)
+            and normalise_role_name(channel.name) == wanted,
+            guild.channels,
+        )
+
+    async def build_transcript(
+        self,
+        channel: discord.TextChannel,
+        owner_id: int,
+        closed_by: discord.abc.User,
+        ticket_type: str,
+    ) -> tuple[bytes, int]:
+        label = TICKET_TYPES[ticket_type][0]
+        owner = channel.guild.get_member(owner_id)
+        owner_text = f"{owner} ({owner_id})" if owner else str(owner_id)
+        lines = [
+            "DENSITY SMP TICKET TRANSCRIPT",
+            f"Ticket: #{channel.name} ({channel.id})",
+            f"Type: {label}",
+            f"Opened by: {owner_text}",
+            f"Closed by: {closed_by} ({closed_by.id})",
+            f"Created: {channel.created_at.isoformat()}",
+            f"Closed: {discord.utils.utcnow().isoformat()}",
+            "",
+            "MESSAGES",
+            "========",
+        ]
+        message_count = 0
+        async for message in channel.history(limit=5000, oldest_first=True):
+            message_count += 1
+            content = message.clean_content or "<no text>"
+            lines.append(
+                f"[{message.created_at.isoformat()}] "
+                f"{message.author} ({message.author.id}): {content}"
+            )
+            for attachment in message.attachments:
+                lines.append(f"  [attachment] {attachment.filename}: {attachment.url}")
+            for embed in message.embeds:
+                if embed.title:
+                    lines.append(f"  [embed title] {embed.title}")
+                if embed.description:
+                    lines.append(f"  [embed description] {embed.description}")
+                for field in embed.fields:
+                    lines.append(f"  [embed field] {field.name}: {field.value}")
+
+        transcript = "\n".join(lines).encode("utf-8")
+        if len(transcript) > MAX_TRANSCRIPT_BYTES:
+            ending = b"\n\n[Transcript truncated because it exceeded the Discord upload limit.]\n"
+            transcript = transcript[: MAX_TRANSCRIPT_BYTES - len(ending)]
+            transcript = transcript.decode("utf-8", errors="ignore").encode("utf-8") + ending
+        return transcript, message_count
+
+    async def file_ticket_log(
+        self,
+        channel: discord.TextChannel,
+        owner_id: int,
+        closed_by: discord.abc.User,
+        ticket_type: str,
+    ) -> discord.Message:
+        log_channel = self.ticket_log_channel(channel.guild, ticket_type)
+        if log_channel is None:
+            expected_name = TICKET_LOG_CHANNELS.get(ticket_type, "ticket log channel")
+            raise RuntimeError(f"Could not find #{expected_name}")
+
+        transcript, message_count = await self.build_transcript(
+            channel,
+            owner_id,
+            closed_by,
+            ticket_type,
+        )
+        owner = channel.guild.get_member(owner_id)
+        label = TICKET_TYPES[ticket_type][0]
+        summary = discord.Embed(
+            title=f"{label} ticket closed",
+            description=(
+                f"**Ticket:** `#{channel.name}`\n"
+                f"**Opened by:** {owner.mention if owner else owner_id}\n"
+                f"**Closed by:** {closed_by.mention}\n"
+                f"**Messages:** {message_count}"
+            ),
+            color=discord.Color.red(),
+            timestamp=discord.utils.utcnow(),
+        )
+        summary.set_footer(text=f"Ticket ID: {channel.id}")
+        filename = f"{safe_channel_name(channel.name)}-{channel.id}.txt"
+        return await log_channel.send(
+            embed=summary,
+            file=discord.File(io.BytesIO(transcript), filename=filename),
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    async def file_ticket_opened(
+        self,
+        channel: discord.TextChannel,
+        opened_by: discord.Member,
+        ticket_type: str,
+    ) -> discord.Message:
+        log_channel = self.ticket_log_channel(channel.guild, ticket_type)
+        if log_channel is None:
+            expected_name = TICKET_LOG_CHANNELS.get(ticket_type, "ticket log channel")
+            raise RuntimeError(f"Could not find #{expected_name}")
+        label, emoji, _ = TICKET_TYPES[ticket_type]
+        embed = discord.Embed(
+            title=f"{emoji} {label} ticket opened",
+            description=(
+                f"**Ticket:** {channel.mention}\n"
+                f"**Opened by:** {opened_by.mention}\n"
+                f"**User ID:** `{opened_by.id}`"
+            ),
+            color=discord.Color.green(),
+            timestamp=discord.utils.utcnow(),
+        )
+        embed.set_footer(text=f"Ticket ID: {channel.id}")
+        return await log_channel.send(
+            embed=embed,
+            allowed_mentions=discord.AllowedMentions.none(),
+        )
+
+    async def create_ticket(
+        self,
+        interaction: discord.Interaction,
+        ticket_type: str,
+        answers: dict[str, str] | None = None,
+    ) -> None:
         if (
             interaction.guild is None
             or not isinstance(interaction.user, discord.Member)
@@ -226,6 +432,14 @@ class Tickets(commands.Cog):
             return
 
         await interaction.response.defer(ephemeral=True, thinking=True)
+        log_channel = self.ticket_log_channel(interaction.guild, ticket_type)
+        if log_channel is None:
+            expected_name = TICKET_LOG_CHANNELS[ticket_type]
+            await interaction.followup.send(
+                f"Tickets are temporarily unavailable because #{expected_name} is missing.",
+                ephemeral=True,
+            )
+            return
         category = self.ticket_category(interaction.guild)
         if category is None:
             category = await interaction.guild.create_category(
@@ -276,12 +490,24 @@ class Tickets(commands.Cog):
             color=discord.Color.blurple(),
         )
         embed.set_footer(text="Density SMP Tickets")
+        if ticket_type == "bug" and answers:
+            embed.add_field(name="Minecraft IGN", value=answers["ign"], inline=False)
+            embed.add_field(name="Issue", value=answers["issue"], inline=False)
+            embed.add_field(
+                name="Clip",
+                value=(
+                    answers["clip_link"]
+                    or "No clip link supplied — please upload a clip in this ticket if possible."
+                ),
+                inline=False,
+            )
         await channel.send(
             content=interaction.user.mention,
             embed=embed,
             view=CloseTicketView(self),
             allowed_mentions=discord.AllowedMentions(users=[interaction.user], roles=False, everyone=False),
         )
+        await self.file_ticket_opened(channel, interaction.user, ticket_type)
         await interaction.followup.send(f"Your ticket is ready: {channel.mention}", ephemeral=True)
 
     def panel_embed(self) -> discord.Embed:
