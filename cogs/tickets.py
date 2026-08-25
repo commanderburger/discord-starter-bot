@@ -12,8 +12,8 @@ from cogs.permissions import (
     SeniorStaffOnly,
     member_is_staff,
     normalise_role_name,
+    role_is_staff,
     senior_only,
-    staff_role_names,
 )
 
 
@@ -263,7 +263,6 @@ class Tickets(commands.Cog):
         )
 
     def staff_overwrites(self, guild: discord.Guild) -> dict[discord.Role, discord.PermissionOverwrite]:
-        names = staff_role_names()
         return {
             role: discord.PermissionOverwrite(
                 view_channel=True,
@@ -273,7 +272,7 @@ class Tickets(commands.Cog):
                 embed_links=True,
             )
             for role in guild.roles
-            if normalise_role_name(role.name) in names
+            if role_is_staff(role)
         }
 
     def ticket_log_channel(

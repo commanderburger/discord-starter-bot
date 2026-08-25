@@ -8,9 +8,18 @@ from discord import app_commands
 DEFAULT_STAFF_ROLES = (
     "Owner,Co Owner,Co-Owner,Manager,Administrator,Admin,"
     "Senior Moderator,Senior Mod,Moderator,Mod,Trial Moderator,Trial Mod,"
-    "Support,Support Team,Helper,Staff"
+    "Support,Support Team,Helper,Helpers,Staff,Partner Manager,Partner Managers"
 )
 DEFAULT_SENIOR_ROLES = "Owner,Co Owner,Co-Owner,Manager"
+STAFF_ROLE_KEYWORDS = (
+    "staff",
+    "moderator",
+    "mod",
+    "helper",
+    "support",
+    "admin",
+    "manager",
+)
 
 
 class StaffOnly(app_commands.CheckFailure):
@@ -48,6 +57,25 @@ def member_has_named_role(member: discord.Member, names: set[str]) -> bool:
     return any(normalise_role_name(role.name) in names for role in member.roles)
 
 
+def role_is_staff(role: discord.Role) -> bool:
+    """Recognise configured and decorated staff roles without broad member access."""
+
+    normalised = normalise_role_name(role.name)
+    if normalised in staff_role_names():
+        return True
+
+    words = re.findall(r"[a-z0-9]+", role.name.casefold())
+    return any(
+        word == keyword or word.startswith(keyword)
+        for word in words
+        for keyword in STAFF_ROLE_KEYWORDS
+    )
+
+
+def member_has_staff_role(member: discord.Member) -> bool:
+    return any(role_is_staff(role) for role in member.roles)
+
+
 def member_is_staff(interaction: discord.Interaction, permission: str | None = None) -> bool:
     if not interaction.guild or not isinstance(interaction.user, discord.Member):
         return False
@@ -60,7 +88,7 @@ def member_is_staff(interaction: discord.Interaction, permission: str | None = N
     if permission and getattr(permissions, permission, False):
         return True
 
-    return member_has_named_role(interaction.user, staff_role_names())
+    return member_has_staff_role(interaction.user)
 
 
 def member_is_senior(interaction: discord.Interaction) -> bool:
