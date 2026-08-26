@@ -60,6 +60,7 @@ class StarterBot(commands.Bot):
             "cogs.social_links",
             "cogs.staff_tools",
             "cogs.staff_guide",
+            "cogs.ai_chat",
         ):
             await self.load_extension(extension)
 
@@ -93,3 +94,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
