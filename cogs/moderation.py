@@ -28,6 +28,11 @@ def normalise_channel_name(name: str) -> str:
     return re.sub(r"[^a-z0-9]", "", name.casefold())
 
 
+def topic_is_open_ticket(topic: str | None) -> bool:
+    value = topic or ""
+    return "density-ticket-owner:" in value and "density-ticket-open:true" in value
+
+
 def parse_duration(value: str) -> timedelta:
     match = DURATION_RE.fullmatch(value.strip())
     if not match:
@@ -73,15 +78,27 @@ class Moderation(commands.Cog):
             names.add(normalise_channel_name(channel.parent.name))
         return bool(names & self.exempt_channels)
 
+    @staticmethod
+    def channel_is_open_ticket(channel: discord.abc.GuildChannel | discord.Thread) -> bool:
+        if isinstance(channel, discord.TextChannel):
+            return topic_is_open_ticket(channel.topic)
+        if isinstance(channel, discord.Thread) and isinstance(channel.parent, discord.TextChannel):
+            return topic_is_open_ticket(channel.parent.topic)
+        return False
+
     async def check_message(self, message: discord.Message) -> None:
         if not message.guild or message.author.bot or not message.content:
             return
-        if self.channel_is_exempt(message.channel) or not DISCORD_INVITE_RE.search(message.content):
+        if (
+            self.channel_is_exempt(message.channel)
+            or self.channel_is_open_ticket(message.channel)
+            or not DISCORD_INVITE_RE.search(message.content)
+        ):
             return
         try:
             await message.delete()
             await message.channel.send(
-                f"{message.author.mention}, Discord invite links are only allowed in the approved advert channels.",
+                f"{message.author.mention}, Discord invite links are only allowed in tickets and the approved advert channels.",
                 delete_after=8,
             )
             await self.send_mod_log(

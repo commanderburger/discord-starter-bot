@@ -64,6 +64,10 @@ PARTNER_VISION_TIMEOUT = 60
 PARTNER_APPROVAL_CONFIDENCE = 0.85
 PARTNER_APPLICATION_FOOTER = "Density SMP Partner Application"
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+DISCORD_INVITE_LINK_RE = re.compile(
+    r"(?:https?://)?(?:www\.)?(?:discord(?:app)?\.com/invite|discord\.gg)/[a-z0-9-]+",
+    re.IGNORECASE,
+)
 try:
     PARTNER_MINIMUM_MEMBERS = max(1, int(os.getenv("PARTNER_MINIMUM_MEMBERS", "31")))
 except ValueError:
@@ -196,6 +200,11 @@ def agreed_to_partner_requirements(value: str) -> bool:
     return cleaned in {"yes", "y", "agree", "i agree", "i do agree"} or cleaned.startswith(
         "i agree "
     )
+
+
+def extract_discord_invite(value: str) -> str | None:
+    match = DISCORD_INVITE_LINK_RE.search(value)
+    return match.group(0) if match else None
 
 
 def find_named_text_channel(guild: discord.Guild, configured: str) -> discord.TextChannel | None:
@@ -332,12 +341,6 @@ class PartnerApplicationModal(discord.ui.Modal):
             max_length=12,
             required=True,
         )
-        self.invite = discord.ui.TextInput(
-            label="Server invite or link",
-            placeholder="Paste the permanent invite or server link",
-            max_length=500,
-            required=True,
-        )
         self.agreement = discord.ui.TextInput(
             label="Do you agree to our requirements?",
             placeholder="Type: I agree",
@@ -346,16 +349,15 @@ class PartnerApplicationModal(discord.ui.Modal):
             required=True,
         )
         self.advertisement = discord.ui.TextInput(
-            label="Advertisement to post if approved",
-            placeholder="Paste the full advert you want posted in #partners",
+            label="Advertisement (include permanent invite)",
+            placeholder="Paste the full advert, including one permanent Discord invite",
             style=discord.TextStyle.paragraph,
             min_length=10,
-            max_length=1000,
+            max_length=4000,
             required=True,
         )
         self.add_item(self.server_name)
         self.add_item(self.member_count)
-        self.add_item(self.invite)
         self.add_item(self.agreement)
         self.add_item(self.advertisement)
 
@@ -380,15 +382,24 @@ class PartnerApplicationModal(discord.ui.Modal):
                 ephemeral=True,
             )
             return
+        advertisement = str(self.advertisement.value).strip()
+        invite = extract_discord_invite(advertisement)
+        if invite is None:
+            await interaction.response.send_message(
+                "Include one permanent Discord invite (for example `https://discord.gg/example`) "
+                "inside the advertisement. You only need to provide it there.",
+                ephemeral=True,
+            )
+            return
         await self.cog.create_ticket(
             interaction,
             "partnership",
             answers={
                 "server_name": str(self.server_name.value).strip(),
                 "member_count": str(members),
-                "invite": str(self.invite.value).strip(),
+                "invite": invite,
                 "agreement": "Yes — applicant agreed",
-                "advertisement": str(self.advertisement.value).strip(),
+                "advertisement": advertisement,
             },
         )
 
@@ -731,12 +742,17 @@ class Tickets(commands.Cog):
             description=(
                 "By choosing **Auto Partner**, you agreed to use the exact required ping Density Bot "
                 "gives you and to have your screenshot checked automatically.\n\n"
-                "Post your Density SMP advertisement in your server using the required ping below, "
-                "then upload a clear screenshot in this ticket. The screenshot must show the sent "
-                "message and the ping.\n\n"
+                "Post the **Density SMP advertisement** in your server using the required ping below, "
+                "then upload **one clear PNG or JPG screenshot** in this ticket.\n\n"
+                "Your screenshot must clearly show:\n"
+                "• the complete advert as a **sent Discord message** (not text waiting in the message box);\n"
+                "• the exact ping used at the top of the advert;\n"
+                "• enough of the Discord channel to show where it was posted; and\n"
+                "• readable, uncropped text with no edits covering the ping or advert.\n\n"
                 f"**Required ping:** `{tier.required_ping}`\n"
                 f"**Matched tier:** {tier.label}\n\n"
-                "If the image is unclear or cannot be verified, staff will review it instead."
+                "If the image is cropped, blurry, shows the wrong ping, or cannot be verified, it will "
+                "not be approved automatically and staff may need to review it."
             ),
             color=discord.Color.blurple(),
         )
@@ -750,13 +766,22 @@ class Tickets(commands.Cog):
                 if getattr(embed.footer, "text", None) != PARTNER_APPLICATION_FOOTER:
                     continue
                 fields = {field.name: field.value for field in embed.fields}
-                required = {"Server", "Members", "Invite / link", "Advertisement"}
-                if required.issubset(fields):
+                required = {"Server", "Members"}
+                advertisement_parts = [
+                    fields[name]
+                    for name in ("Advertisement", "Advertisement 2", "Advertisement 3", "Advertisement 4")
+                    if name in fields
+                ]
+                if required.issubset(fields) and advertisement_parts:
+                    advertisement = "".join(advertisement_parts)
+                    invite = fields.get("Invite / link") or extract_discord_invite(advertisement)
+                    if not invite:
+                        continue
                     return {
                         "server_name": fields["Server"],
                         "member_count": fields["Members"].replace(",", ""),
-                        "invite": fields["Invite / link"],
-                        "advertisement": fields["Advertisement"],
+                        "invite": invite,
+                        "advertisement": advertisement,
                     }
         return None
 
@@ -908,7 +933,14 @@ class Tickets(commands.Cog):
             color=discord.Color.blurple(),
             timestamp=discord.utils.utcnow(),
         )
-        embed.add_field(name="Server link", value=application["invite"][:1000], inline=False)
+        try:
+            invite = await self.bot.fetch_invite(application["invite"], with_counts=True)
+            invite_guild = invite.guild
+            guild_icon = getattr(invite_guild, "icon", None) if invite_guild else None
+            if guild_icon:
+                embed.set_thumbnail(url=guild_icon.url)
+        except (discord.HTTPException, ValueError):
+            log.info("Could not load the partner server icon from %s", application["invite"])
         embed.add_field(name="Members", value=f"{int(application['member_count']):,}", inline=True)
         embed.add_field(name="Partner tier", value=tier.label[:1000], inline=True)
         embed.add_field(
@@ -1285,12 +1317,13 @@ class Tickets(commands.Cog):
                 inline=True,
             )
             embed.add_field(name="Agreement", value=answers["agreement"][:100], inline=True)
-            embed.add_field(name="Invite / link", value=answers["invite"][:1000], inline=False)
-            embed.add_field(
-                name="Advertisement",
-                value=answers["advertisement"][:1000],
-                inline=False,
-            )
+            advertisement = answers["advertisement"][:4000]
+            for index, start in enumerate(range(0, len(advertisement), 1000), start=1):
+                embed.add_field(
+                    name="Advertisement" if index == 1 else f"Advertisement {index}",
+                    value=advertisement[start : start + 1000],
+                    inline=False,
+                )
         ping_content = interaction.user.mention
         allowed_roles: list[discord.Role] = []
         if staff_ping_role:
