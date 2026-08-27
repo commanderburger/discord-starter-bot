@@ -13,6 +13,7 @@ A modular Python Discord bot with moderation, Minecraft status, spawner economy 
 - `/help`, `/serverinfo`, `/userinfo`, `/avatar`, `/coinflip`, and `/roll`.
 - Persistent Density SMP ticket panel with Support, Partnerships, Bug Report and Giveaway tickets.
 - New tickets ping `@Staff Team`; Support, Bug Report and Giveaway tickets are filed under `Support Tickets`, while Partnership tickets are filed under `Partnership Requests`.
+- Partnership applications collect the server name, member count, invite, agreement and advert before opening. Applicants can wait for staff or use Auto Partner screenshot verification.
 - Arcane-style chat XP with `/rank`, `/leaderboard`, and level-up posts in `#special-ranks`.
 - One-time release notes in `#bot-updates`, with the channel created automatically if needed.
 - One-time Density SMP YouTube and TikTok posts in the existing `#links` channel.
@@ -23,6 +24,8 @@ A modular Python Discord bot with moderation, Minecraft status, spawner economy 
 - A persistent activity check in `#staff-activity` every five days. Eligible staff have 24 hours to react; missed checks are struck and logged in `#staff-punishments`.
 - Giveaway winners enter their Minecraft IGN and receive a private prize-claim ticket.
 - Private `/api` controls for the server owner and `Owner`/`Manager` roles.
+- Smart OpenAI conversations when a member mentions Density Bot or replies to one of its messages, with separate 30-minute memory per member and channel.
+- A persistent, trusted server knowledge base learned from approved public channels and staff messages. Ticket, staff, log, punishment, application, private and API channels are excluded.
 
 ## 1. Create the Discord application
 
@@ -92,6 +95,9 @@ Recent SCALE releases use Docker for Apps. The bot needs a small private `/data`
    - `TICKET_SUPPORT_CATEGORY_NAME` = `Support Tickets`
    - `TICKET_PARTNERSHIP_CATEGORY_NAME` = `Partnership Requests`
    - `TICKET_STAFF_PING_ROLE` = `Staff Team`
+   - `PARTNERS_CHANNEL_NAME` = `partners`
+   - `PARTNER_PING_TIERS_JSON` = the member ranges, proof pings and Discord roles used by Auto Partner (example below)
+   - `PARTNER_VISION_MODEL` = `gpt-5-mini` (optional; reuses `OPENAI_API_KEY`)
    - `SPECIAL_RANKS_CHANNEL` = `special-ranks`
    - `BOT_UPDATES_CHANNEL` = `bot-updates`
    - `SOCIAL_LINKS_CHANNEL` = `links`
@@ -101,6 +107,11 @@ Recent SCALE releases use Docker for Apps. The bot needs a small private `/data`
    - `STAFF_ACTIVITY_PING_ROLE` = `Staff Team`
    - `BOT_TIMEZONE` = `Europe/London`
    - `DONUT_API_KEY` = the private key created with `/api` in DonutSMP (needed only for `!stats IGN`)
+   - `OPENAI_API_KEY` = a private OpenAI project API key (needed for mention-based AI chat)
+   - `OPENAI_MODEL` = `gpt-5-mini` (optional; this is the default)
+   - `AI_MEMORY_MINUTES` = `30` (optional conversation-memory window)
+   - `AI_LEARN_CHANNELS` = `announcements,rules,faq,information,server-info,links,updates,bot-updates` (approved public knowledge channels)
+   - `AI_LEARN_ROLE_NAMES` = `Owner,Co Owner,Co-Owner,Manager,Admin,Moderator,Staff Team,Staff` (roles whose public messages can teach the bot)
    - `WELCOME_CHANNEL_NAMES` = `welcome,welcom`
    - `API_ALLOWED_ROLES` = `Owner,Manager`
    - `TEST_GUILD_ID` = your server ID (optional)
@@ -161,6 +172,40 @@ The bot accepts `!` commands as well as slash commands. It creates and maintains
 The five-day activity schedule and its open 24-hour reaction window are kept in `/data/staff-tools.json`, so restarting or updating the TrueNAS container does not reset the clock. Automatic and manual strike actions are logged in the staff-only `#staff-punishments` channel.
 
 Giveaways and warnings are saved under `/data`, so the existing TrueNAS `/data` storage mount keeps them after updates and restarts.
+
+### Auto Partner configuration
+
+Partnership applicants first enter their server name, member count, permanent invite, agreement and advertisement. Inside the ticket they can choose **Wait for staff** or **Auto Partner**. Auto Partner tells them which ping their proof must contain, accepts an image upload, and uses the configured OpenAI vision model to check it. Only a clear match with at least 85% confidence is posted automatically; missing tiers, missing roles, unclear images and API errors go to `@Staff Team` for manual review.
+
+Set `PARTNER_PING_TIERS_JSON` in TrueNAS to a single-line JSON list. Replace these examples with the real Density SMP rules and exact Discord role names:
+
+```json
+[
+  {
+    "min_members": 500,
+    "max_members": 599,
+    "required_ping": "@Example Partner Ping",
+    "post_role": "Example Density Ping Role",
+    "label": "500–599 members"
+  },
+  {
+    "min_members": 600,
+    "max_members": null,
+    "required_ping": "@Example Large Partner Ping",
+    "post_role": "Example Large Density Ping Role",
+    "label": "600+ members"
+  }
+]
+```
+
+- `required_ping` is the exact ping text that must be visible in the applicant's screenshot.
+- `post_role` is the exact role name Density Bot should mention with the approved advert in `#partners`.
+- Ranges must not overlap. The bot disables automatic approval if the configuration overlaps or is invalid.
+- The included `config/partner_tiers.json` is deliberately empty so no real application is auto-approved before the server's rules are supplied.
+
+### Smart conversations
+
+Mention Density Bot with a message, or reply to one of the bot's AI replies, to have a natural conversation. Conversation state is separated by member and channel and expires after 30 minutes by default. The bot backfills recent messages from approved public knowledge channels, keeps learning approved public/staff facts, and retrieves only the most relevant snippets for each question. Random members cannot poison the knowledge base through ordinary chat, and sensitive channel-name patterns are excluded. Deleted messages are removed and edited messages are updated. The knowledge database is stored at `/data/ai-knowledge.sqlite3`, so the existing private `/data` mount keeps it across updates. Replies are rate-limited and cannot generate Discord pings. Add `OPENAI_API_KEY` only as a TrueNAS environment variable; never paste it into Discord, source files, screenshots, or GitHub. OpenAI API usage is billed separately from ChatGPT subscriptions.
 
 DensityBridge provides the endpoint in this shape (shortened here):
 
