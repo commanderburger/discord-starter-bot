@@ -189,10 +189,25 @@ def with_topic_marker(topic: str | None, name: str, value: str) -> str:
 
 
 def parse_member_count(value: str) -> int | None:
-    cleaned = value.strip().replace(",", "")
-    if not cleaned.isdigit():
+    """Parse a human-entered Discord member count.
+
+    The partnership form asks for a number, but applicants commonly enter
+    values such as ``773 members``, ``about 773`` or ``1.2k``.  Accept one
+    unambiguous count while rejecting ranges or messages containing multiple
+    numbers, where choosing a value automatically would be unsafe.
+    """
+
+    cleaned = value.strip().casefold().replace(",", "").replace("_", "")
+    matches = re.findall(r"(?<![\d.])(\d+(?:\.\d+)?)([km])?\b", cleaned)
+    if len(matches) != 1:
         return None
-    count = int(cleaned)
+
+    number, suffix = matches[0]
+    multiplier = {"": 1, "k": 1_000, "m": 1_000_000}[suffix]
+    scaled = float(number) * multiplier
+    count = round(scaled)
+    if abs(scaled - count) > 1e-9:
+        return None
     return count if 1 <= count <= 100_000_000 else None
 
 
@@ -350,7 +365,7 @@ class PartnerApplicationModal(discord.ui.Modal):
         )
         self.member_count = discord.ui.TextInput(
             label="How many members does it have?",
-            placeholder="Example: 550",
+            placeholder="Example: 773 or 1.2k",
             min_length=1,
             max_length=12,
             required=True,
@@ -379,7 +394,7 @@ class PartnerApplicationModal(discord.ui.Modal):
         members = parse_member_count(str(self.member_count.value))
         if members is None:
             await interaction.response.send_message(
-                "Please enter the member count using numbers only, for example `550`.",
+                "Enter one member count, for example `773`, `773 members` or `1.2k`.",
                 ephemeral=True,
             )
             return
@@ -1704,3 +1719,4 @@ class Tickets(commands.Cog):
 
 async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(Tickets(bot))
+
