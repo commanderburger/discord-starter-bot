@@ -1,1 +1,23 @@
-[]
+[
+  {
+    "min_members": 241,
+    "max_members": 280,
+    "required_ping": "@everyone",
+    "post_role": null,
+    "label": "241–280 members — they use @everyone; Density uses no ping"
+  },
+  {
+    "min_members": 281,
+    "max_members": 370,
+    "required_ping": "@everyone",
+    "post_role": "partner ping",
+    "label": "281–370 members — they use @everyone; Density uses @partner ping"
+  },
+  {
+    "min_members": 400,
+    "max_members": null,
+    "required_ping": "@everyone",
+    "post_role": null,
+    "label": "400+ members — best case: they use @everyone; Density uses no ping"
+  }
+]
