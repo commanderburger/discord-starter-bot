@@ -393,8 +393,12 @@ class Applications(commands.Cog):
                     log.exception("Could not set up staff applications in %s", guild.name)
 
     async def start_application(self, interaction: discord.Interaction) -> None:
+        # Acknowledge the button immediately. Creating a DM can take long enough for
+        # Discord's three-second interaction window to expire, which previously sent
+        # the introduction but prevented the question task from ever starting.
+        await interaction.response.defer(ephemeral=True)
         if interaction.guild is None or not isinstance(interaction.user, discord.Member):
-            await interaction.response.send_message("Use this button in the Density SMP server.", ephemeral=True)
+            await interaction.followup.send("Use this button in the Density SMP server.", ephemeral=True)
             return
 
         guild_id = interaction.guild.id
@@ -410,7 +414,7 @@ class Applications(commands.Cog):
             except ValueError:
                 denied_until = now
             if denied_until > now:
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     f"You can apply again <t:{int(denied_until.timestamp())}:R>.",
                     ephemeral=True,
                 )
@@ -431,10 +435,10 @@ class Applications(commands.Cog):
                 if existing["status"] == "pending"
                 else "Your Partner Manager application has already been accepted."
             )
-            await interaction.response.send_message(message, ephemeral=True)
+            await interaction.followup.send(message, ephemeral=True)
             return
         if key in self.in_progress:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "You already have an application in progress. Check your DMs.",
                 ephemeral=True,
             )
@@ -453,14 +457,14 @@ class Applications(commands.Cog):
                 )
             )
         except discord.Forbidden:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "I cannot DM you. Enable direct messages from server members, then press the button again.",
                 ephemeral=True,
             )
             return
 
         self.in_progress.add(key)
-        await interaction.response.send_message(
+        await interaction.followup.send(
             "Application started — check your DMs from Density Bot.",
             ephemeral=True,
         )
