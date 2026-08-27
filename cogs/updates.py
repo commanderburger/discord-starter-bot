@@ -13,7 +13,7 @@ from cogs.permissions import normalise_role_name
 log = logging.getLogger("starter-bot.updates")
 DATA_FILE = Path(os.getenv("BOT_DATA_DIR", "/data")) / "release-announcements.json"
 UPDATES_CHANNEL_NAME = os.getenv("BOT_UPDATES_CHANNEL", "bot-updates")
-RELEASE_ID = "2026-08-26-auto-partners-v16"
+RELEASE_ID = "2026-08-28-partner-manager-applications-v17"
 
 
 def load_announced_releases() -> set[str]:
@@ -83,11 +83,13 @@ class Updates(commands.Cog):
                 embed = discord.Embed(
                     title="Density Bot Update",
                     description=(
-                        "• Partnership tickets now ask for the server name, member count, invite, agreement and advert.\n"
-                        "• Applicants can choose a normal staff response or **Auto Partner**.\n"
-                        "• Auto Partner gives the correct proof ping for the configured member tier and checks an uploaded screenshot.\n"
-                        "• Clear, high-confidence proof posts the advert in #partners with the configured role ping.\n"
-                        "• Missing, unclear or mismatched configuration is always sent to staff for review."
+                        "• Added a **Partner Manager application** panel.\n"
+                        "• Applicants answer one question at a time in private DMs.\n"
+                        "• Applications ask for previous-server experience, server links, and availability for five partnerships weekly.\n"
+                        "• Completed applications go to the private pending review channel.\n"
+                        "• Owner, Co-Owner and Manager can accept or deny with review buttons.\n"
+                        "• Accepted applicants automatically receive Partner Manager and Staff Team.\n"
+                        "• Denied applicants are notified and cannot reapply for 14 days."
                     ),
                     color=discord.Color.blurple(),
                     timestamp=discord.utils.utcnow(),
