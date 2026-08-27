@@ -64,6 +64,11 @@ PARTNER_VISION_TIMEOUT = 60
 PARTNER_APPROVAL_CONFIDENCE = 0.85
 PARTNER_APPLICATION_FOOTER = "Density SMP Partner Application"
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+try:
+    PARTNER_MINIMUM_MEMBERS = max(1, int(os.getenv("PARTNER_MINIMUM_MEMBERS", "31")))
+except ValueError:
+    PARTNER_MINIMUM_MEMBERS = 31
+    log.warning("PARTNER_MINIMUM_MEMBERS is invalid; using 31")
 
 
 @dataclass(frozen=True)
@@ -71,7 +76,7 @@ class PartnerTier:
     min_members: int
     max_members: int | None
     required_ping: str
-    post_role: str
+    post_role: str | None
     label: str
 
     def contains(self, member_count: int) -> bool:
@@ -88,13 +93,19 @@ def _tier_from_record(record: object) -> PartnerTier | None:
         maximum_raw = record.get("max_members")
         maximum = int(maximum_raw) if maximum_raw not in (None, "") else None
         required_ping = str(record["required_ping"]).strip()
-        post_role = str(record.get("post_role") or required_ping.lstrip("@")).strip()
+        if "post_role" not in record:
+            post_role: str | None = required_ping.lstrip("@").strip()
+        else:
+            post_role_raw = record.get("post_role")
+            post_role = str(post_role_raw).strip() if post_role_raw is not None else None
+            if post_role and post_role.casefold() in {"none", "no ping", "no-ping"}:
+                post_role = None
         label = str(record.get("label") or required_ping).strip()
     except (KeyError, TypeError, ValueError):
         return None
     if minimum < 0 or (maximum is not None and maximum < minimum):
         return None
-    if not required_ping or not post_role:
+    if not required_ping:
         return None
     return PartnerTier(minimum, maximum, required_ping, post_role, label)
 
@@ -356,6 +367,13 @@ class PartnerApplicationModal(discord.ui.Modal):
                 ephemeral=True,
             )
             return
+        if members < PARTNER_MINIMUM_MEMBERS:
+            await interaction.response.send_message(
+                f"Density SMP does not offer partnerships to servers below "
+                f"{PARTNER_MINIMUM_MEMBERS} members.",
+                ephemeral=True,
+            )
+            return
         if not agreed_to_partner_requirements(str(self.agreement.value)):
             await interaction.response.send_message(
                 "You need to type `I agree` after reading the partnership requirements.",
@@ -423,7 +441,7 @@ class PartnerChoiceView(discord.ui.View):
         await self.cog.partner_wait_for_staff(interaction)
 
     @discord.ui.button(
-        label="Auto Partner",
+        label="Auto Partner (I agree)",
         style=discord.ButtonStyle.primary,
         emoji="⚡",
         custom_id="density-partner-auto-v1",
@@ -595,6 +613,8 @@ class Tickets(commands.Cog):
 
     @staticmethod
     def partner_post_role(guild: discord.Guild, tier: PartnerTier) -> discord.Role | None:
+        if tier.post_role is None:
+            return None
         wanted = normalise_role_name(tier.post_role)
         return discord.utils.find(
             lambda role: normalise_role_name(role.name) == wanted,
@@ -683,7 +703,13 @@ class Tickets(commands.Cog):
                 ephemeral=True,
             )
             return
-        if interaction.guild is None or self.partner_post_role(interaction.guild, tier) is None:
+        if (
+            interaction.guild is None
+            or (
+                tier.post_role is not None
+                and self.partner_post_role(interaction.guild, tier) is None
+            )
+        ):
             await interaction.response.defer(ephemeral=True)
             await self.send_partner_staff_review(
                 interaction.channel,
@@ -703,6 +729,8 @@ class Tickets(commands.Cog):
         embed = discord.Embed(
             title="⚡ Auto Partner verification",
             description=(
+                "By choosing **Auto Partner**, you agreed to use the exact required ping Density Bot "
+                "gives you and to have your screenshot checked automatically.\n\n"
                 "Post your Density SMP advertisement in your server using the required ping below, "
                 "then upload a clear screenshot in this ticket. The screenshot must show the sent "
                 "message and the ping.\n\n"
@@ -867,7 +895,7 @@ class Tickets(commands.Cog):
         if partners_channel is None:
             raise RuntimeError(f"Could not find #{PARTNERS_CHANNEL_NAME}")
         role = self.partner_post_role(channel.guild, tier)
-        if role is None:
+        if tier.post_role is not None and role is None:
             raise RuntimeError(f"Could not find the partner ping role {tier.post_role!r}")
         advertisement = (
             application["advertisement"]
@@ -883,11 +911,20 @@ class Tickets(commands.Cog):
         embed.add_field(name="Server link", value=application["invite"][:1000], inline=False)
         embed.add_field(name="Members", value=f"{int(application['member_count']):,}", inline=True)
         embed.add_field(name="Partner tier", value=tier.label[:1000], inline=True)
+        embed.add_field(
+            name="Density ping",
+            value=role.mention if role else "No ping",
+            inline=True,
+        )
         embed.set_footer(text=f"Approved automatically • Applicant: {applicant} ({applicant.id})")
         posted = await partners_channel.send(
-            content=role.mention,
+            content=role.mention if role else None,
             embed=embed,
-            allowed_mentions=discord.AllowedMentions(roles=[role], users=False, everyone=False),
+            allowed_mentions=discord.AllowedMentions(
+                roles=[role] if role else [],
+                users=False,
+                everyone=False,
+            ),
         )
         await channel.edit(
             topic=with_topic_marker(channel.topic, "partner-mode", "posted"),
@@ -1276,8 +1313,9 @@ class Tickets(commands.Cog):
                     description=(
                         "Choose **Wait for staff** for a normal review, or **Auto Partner** to "
                         "post your advert in your server, upload proof, and have Density Bot check "
-                        "the required ping. Unclear proof always goes to staff instead of being "
-                        "approved automatically."
+                        "the required ping. **Clicking Auto Partner means you agree to use the exact "
+                        "ping the bot gives you.** Unclear proof always goes to staff instead of "
+                        "being approved automatically."
                     ),
                     color=discord.Color.blurple(),
                 ),
