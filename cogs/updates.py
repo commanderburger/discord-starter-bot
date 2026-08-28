@@ -13,7 +13,7 @@ from cogs.permissions import normalise_role_name
 log = logging.getLogger("starter-bot.updates")
 DATA_FILE = Path(os.getenv("BOT_DATA_DIR", "/data")) / "release-announcements.json"
 UPDATES_CHANNEL_NAME = os.getenv("BOT_UPDATES_CHANNEL", "bot-updates")
-RELEASE_ID = "2026-08-28-partner-manager-applications-v17"
+RELEASE_ID = "2026-08-28-helper-applications-ai-review-v18"
 
 
 def load_announced_releases() -> set[str]:
@@ -83,13 +83,12 @@ class Updates(commands.Cog):
                 embed = discord.Embed(
                     title="Density Bot Update",
                     description=(
-                        "• Added a **Partner Manager application** panel.\n"
-                        "• Applicants answer one question at a time in private DMs.\n"
-                        "• Applications ask for previous-server experience, server links, and availability for five partnerships weekly.\n"
-                        "• Completed applications go to the private pending review channel.\n"
-                        "• Owner, Co-Owner and Manager can accept or deny with review buttons.\n"
-                        "• Accepted applicants automatically receive Partner Manager and Staff Team.\n"
-                        "• Denied applicants are notified and cannot reapply for 14 days."
+                        "• Added a separate **Helper application** using the existing staff questions.\n"
+                        "• The panel now offers Partner Manager and Helper applications.\n"
+                        "• Applicants are warned that AI-generated or AI-rewritten answers are prohibited.\n"
+                        "• Possible AI-style writing is flagged for manual review and never treated as proof by itself.\n"
+                        "• Accepted Helper applicants automatically receive Helper and Staff Team.\n"
+                        "• Each role has its own 14-day denial cooldown, so a denial for one does not block the other."
                     ),
                     color=discord.Color.blurple(),
                     timestamp=discord.utils.utcnow(),

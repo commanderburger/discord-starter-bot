@@ -21,15 +21,16 @@ PENDING_CHANNEL_NAME = os.getenv("STAFF_APPLICATION_PENDING_CHANNEL", "pending")
 ACCEPTED_CHANNEL_NAME = os.getenv("STAFF_APPLICATION_ACCEPTED_CHANNEL", "accepted")
 DENIED_CHANNEL_NAME = os.getenv("STAFF_APPLICATION_DENIED_CHANNEL", "denied")
 PARTNER_MANAGER_ROLE_NAME = os.getenv("PARTNER_MANAGER_ROLE", "Partner Manager")
+HELPER_ROLE_NAME = os.getenv("HELPER_ROLE", "Helper")
 STAFF_TEAM_ROLE_NAME = os.getenv("STAFF_TEAM_ROLE", "Staff Team")
-PANEL_MARKER = "Density Partner Manager Applications v1"
+PANEL_MARKER = "Density Staff Applications v2"
 try:
     REAPPLY_DAYS = max(1, int(os.getenv("STAFF_APPLICATION_REAPPLY_DAYS", "14")))
 except ValueError:
     REAPPLY_DAYS = 14
 
 
-QUESTIONS = (
+PARTNER_MANAGER_QUESTIONS = (
     "What is your Minecraft IGN?",
     "How old are you?",
     "What is your timezone?",
@@ -44,6 +45,45 @@ QUESTIONS = (
     "Explain what you understand about Density SMP's partnership member and ping rules.",
     "What would you do if you were unsure whether a partnership should be accepted?",
     "Why should we choose you, and is there anything else we should know?",
+)
+
+HELPER_QUESTIONS = (
+    "Tell us about yourself and why you're applying for staff.",
+    "What experience do you have with moderating Minecraft or Discord servers?",
+    "How would you handle a player who repeatedly breaks the rules after being warned?",
+    "What would you do if another staff member abused their permissions?",
+    "How would you deal with a friend who broke the server rules?",
+    "What qualities make a good staff member, and how do you show them?",
+    "How would you handle an angry player who disagrees with your punishment?",
+    "Why should we choose you instead of other applicants?",
+)
+
+APPLICATION_TYPES = {
+    "partner_manager": {
+        "name": "Partner Manager",
+        "role": PARTNER_MANAGER_ROLE_NAME,
+        "questions": PARTNER_MANAGER_QUESTIONS,
+        "emoji": "🤝",
+    },
+    "helper": {
+        "name": "Helper",
+        "role": HELPER_ROLE_NAME,
+        "questions": HELPER_QUESTIONS,
+        "emoji": "🛟",
+    },
+}
+
+AI_STYLE_PHRASES = (
+    "furthermore",
+    "moreover",
+    "in conclusion",
+    "it is important to",
+    "i would remain calm and professional",
+    "i would approach the situation",
+    "effective communication",
+    "foster a positive environment",
+    "ensure a fair and respectful",
+    "maintain a safe and welcoming",
 )
 
 
@@ -77,6 +117,50 @@ def guild_record(data: dict, guild_id: int) -> dict:
         str(guild_id),
         {"applications": {}, "denied_until": {}, "panel_message_id": None},
     )
+
+
+def application_type(record: dict) -> str:
+    value = str(record.get("application_type", "partner_manager"))
+    return value if value in APPLICATION_TYPES else "partner_manager"
+
+
+def application_config(kind: str) -> dict:
+    return APPLICATION_TYPES.get(kind, APPLICATION_TYPES["partner_manager"])
+
+
+def application_questions(record: dict) -> tuple[str, ...]:
+    return application_config(application_type(record))["questions"]
+
+
+def cooldown_key(kind: str, user_id: int) -> str:
+    return f"{kind}:{user_id}"
+
+
+def ai_style_check(answers: list[str]) -> dict:
+    """Return a cautious style flag, never a claim that AI use is proven."""
+    joined = "\n".join(answers).casefold()
+    matched = sorted({phrase for phrase in AI_STYLE_PHRASES if phrase in joined})
+    nonempty = [answer.strip() for answer in answers if answer.strip()]
+    average_length = sum(map(len, nonempty)) / max(1, len(nonempty))
+    long_answers = sum(len(answer) >= 450 for answer in nonempty)
+    score = len(matched) * 12
+    if average_length >= 550:
+        score += 20
+    if long_answers >= max(4, len(nonempty) // 2):
+        score += 15
+    reasons: list[str] = []
+    if matched:
+        reasons.append("Repeated polished/template phrases: " + ", ".join(matched[:5]))
+    if average_length >= 550:
+        reasons.append("Unusually long average answer length")
+    if long_answers >= max(4, len(nonempty) // 2):
+        reasons.append("Many answers use similarly long, formal responses")
+    return {
+        "flagged": score >= 45,
+        "score": min(score, 100),
+        "reasons": reasons,
+        "notice": "This is a style flag only and is not proof of AI use. Staff must review it manually.",
+    }
 
 
 def find_text_channel(guild: discord.Guild, name: str) -> discord.TextChannel | None:
@@ -161,23 +245,35 @@ def public_panel_overwrites(
 
 def application_text(record: dict) -> str:
     answers = record.get("answers", [])
+    config = application_config(application_type(record))
     lines = [
-        "Density SMP Partner Manager Application",
+        f"Density SMP {config['name']} Application",
         f"Applicant: {record.get('applicant_name', 'Unknown')}",
         f"Discord user ID: {record.get('applicant_id', 'Unknown')}",
         f"Submitted: {record.get('submitted_at', 'Unknown')}",
         "",
     ]
-    for index, question in enumerate(QUESTIONS):
+    for index, question in enumerate(application_questions(record)):
         answer = answers[index] if index < len(answers) else "No answer"
         lines.extend((f"Question {index + 1}: {question}", f"Answer: {answer}", ""))
+    ai_check = record.get("ai_check", {})
+    lines.extend(
+        (
+            "AI style check (manual review required)",
+            f"Flagged: {'Yes' if ai_check.get('flagged') else 'No'}",
+            f"Style score: {ai_check.get('score', 0)}/100",
+            "Reasons: " + ("; ".join(ai_check.get("reasons", [])) or "No strong style indicators found"),
+            str(ai_check.get("notice", "A style flag is not proof of AI use.")),
+        )
+    )
     return "\n".join(lines)
 
 
 def application_file(record: dict) -> discord.File:
     content = application_text(record).encode("utf-8")
     applicant_id = record.get("applicant_id", "unknown")
-    return discord.File(io.BytesIO(content), filename=f"partner-manager-{applicant_id}.txt")
+    kind = application_type(record).replace("_", "-")
+    return discord.File(io.BytesIO(content), filename=f"{kind}-{applicant_id}.txt")
 
 
 def application_embed(record: dict, status: str, reviewer: discord.abc.User | None = None) -> discord.Embed:
@@ -186,11 +282,8 @@ def application_embed(record: dict, status: str, reviewer: discord.abc.User | No
         "accepted": discord.Color.green(),
         "denied": discord.Color.red(),
     }
-    titles = {
-        "pending": "Partner Manager Application • Pending",
-        "accepted": "Partner Manager Application • Accepted",
-        "denied": "Partner Manager Application • Denied",
-    }
+    config = application_config(application_type(record))
+    titles = {state: f"{config['name']} Application • {state.title()}" for state in colours}
     applicant_id = int(record["applicant_id"])
     embed = discord.Embed(
         title=titles[status],
@@ -199,14 +292,27 @@ def application_embed(record: dict, status: str, reviewer: discord.abc.User | No
         timestamp=datetime.fromisoformat(record["submitted_at"]),
     )
     answers = record.get("answers", [])
-    for index, question in enumerate(QUESTIONS):
+    for index, question in enumerate(application_questions(record)):
         answer = answers[index] if index < len(answers) else "No answer"
-        shortened = answer if len(answer) <= 400 else f"{answer[:397]}..."
+        shortened = answer if len(answer) <= 300 else f"{answer[:297]}..."
         embed.add_field(name=f"{index + 1}. {question}", value=shortened or "No answer", inline=False)
+    ai_check = record.get("ai_check", {})
+    ai_flagged = bool(ai_check.get("flagged"))
+    ai_reasons = "; ".join(ai_check.get("reasons", [])) or "No strong style indicators found"
+    embed.add_field(
+        name="AI-use style check",
+        value=(
+            f"{'⚠️ FLAGGED FOR MANUAL REVIEW' if ai_flagged else '✅ No strong indicators found'}\n"
+            f"Style score: {int(ai_check.get('score', 0))}/100\n"
+            f"{ai_reasons[:350]}\n"
+            "This check is not proof and must never be the sole reason for a decision."
+        ),
+        inline=False,
+    )
     if reviewer is not None:
         embed.add_field(name="Reviewed by", value=f"{reviewer.mention} (`{reviewer.id}`)", inline=False)
     if status == "denied" and record.get("denial_reason"):
-        embed.add_field(name="Reason", value=str(record["denial_reason"])[:1024], inline=False)
+        embed.add_field(name="Reason", value=str(record["denial_reason"])[:600], inline=False)
     embed.set_footer(text=f"Application ID: {record['id']} • Full answers attached")
     return embed
 
@@ -223,10 +329,19 @@ class ApplicationPanelView(discord.ui.View):
         custom_id="density-partner-manager-apply-v1",
     )
     async def apply(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
-        await self.cog.start_application(interaction)
+        await self.cog.start_application(interaction, "partner_manager")
+
+    @discord.ui.button(
+        label="Apply for Helper",
+        emoji="🛟",
+        style=discord.ButtonStyle.success,
+        custom_id="density-helper-apply-v1",
+    )
+    async def apply_helper(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+        await self.cog.start_application(interaction, "helper")
 
 
-class DenialReasonModal(discord.ui.Modal, title="Deny Partner Manager Application"):
+class DenialReasonModal(discord.ui.Modal, title="Deny Staff Application"):
     reason = discord.ui.TextInput(
         label="Reason",
         placeholder="Explain why the application was denied.",
@@ -290,7 +405,7 @@ class Applications(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
         self.data = load_data()
-        self.in_progress: set[tuple[int, int]] = set()
+        self.in_progress: set[tuple[int, int, str]] = set()
         self.ready_lock = asyncio.Lock()
         self.decision_lock = asyncio.Lock()
         self.ready_complete = False
@@ -342,38 +457,46 @@ class Applications(commands.Cog):
             channels[status] = channel
         return channels
 
+    def panel_embed(self) -> discord.Embed:
+        embed = discord.Embed(
+            title="📝 Density SMP Staff Applications",
+            description=(
+                "Choose the role you want to apply for below.\n\n"
+                "• Applications are completed privately in DMs, one question at a time.\n"
+                "• **AI-generated or AI-rewritten answers are prohibited.**\n"
+                "• Submissions are checked for possible AI-style writing and may be flagged for manual review.\n"
+                "• A style flag is not proof; staff will always review the answers themselves.\n"
+                f"• If denied, you must wait **{REAPPLY_DAYS} days** before applying for that same role again.\n"
+                "• A denial for one role does not stop you applying for the other role.\n\n"
+                "Make sure your DMs are open before starting."
+            ),
+            color=discord.Color.blurple(),
+        )
+        embed.set_footer(text=PANEL_MARKER)
+        return embed
+
     async def ensure_panel(self, guild: discord.Guild, panel: discord.TextChannel) -> None:
         guild_data = guild_record(self.data, guild.id)
         stored_id = guild_data.get("panel_message_id")
         if stored_id:
             try:
-                await panel.fetch_message(int(stored_id))
+                message = await panel.fetch_message(int(stored_id))
+                await message.edit(embed=self.panel_embed(), view=ApplicationPanelView(self))
                 return
             except (discord.NotFound, discord.Forbidden, discord.HTTPException, ValueError):
                 guild_data["panel_message_id"] = None
 
         async for message in panel.history(limit=50):
             if message.author.id == self.bot.user.id and any(
-                embed.footer and embed.footer.text == PANEL_MARKER for embed in message.embeds
+                embed.footer and embed.footer.text in {PANEL_MARKER, "Density Partner Manager Applications v1"}
+                for embed in message.embeds
             ):
                 guild_data["panel_message_id"] = message.id
+                await message.edit(embed=self.panel_embed(), view=ApplicationPanelView(self))
                 save_data(self.data)
                 return
 
-        embed = discord.Embed(
-            title="🤝 Partner Manager Applications",
-            description=(
-                "Press the button below to apply for **Partner Manager**.\n\n"
-                "• The application is completed privately in DMs.\n"
-                "• You will receive one question at a time.\n"
-                "• Staff will review the finished application.\n"
-                f"• If denied, you must wait **{REAPPLY_DAYS} days** before applying again.\n\n"
-                "Make sure your DMs are open before starting."
-            ),
-            color=discord.Color.blurple(),
-        )
-        embed.set_footer(text=PANEL_MARKER)
-        message = await panel.send(embed=embed, view=ApplicationPanelView(self))
+        message = await panel.send(embed=self.panel_embed(), view=ApplicationPanelView(self))
         guild_data["panel_message_id"] = message.id
         save_data(self.data)
 
@@ -392,7 +515,7 @@ class Applications(commands.Cog):
                 except discord.HTTPException:
                     log.exception("Could not set up staff applications in %s", guild.name)
 
-    async def start_application(self, interaction: discord.Interaction) -> None:
+    async def start_application(self, interaction: discord.Interaction, kind: str) -> None:
         # Acknowledge the button immediately. Creating a DM can take long enough for
         # Discord's three-second interaction window to expire, which previously sent
         # the introduction but prevented the question task from ever starting.
@@ -403,11 +526,15 @@ class Applications(commands.Cog):
 
         guild_id = interaction.guild.id
         user_id = interaction.user.id
-        key = (guild_id, user_id)
+        config = application_config(kind)
+        key = (guild_id, user_id, kind)
         guild_data = guild_record(self.data, guild_id)
         now = datetime.now(UTC)
 
-        denied_until_raw = guild_data.get("denied_until", {}).get(str(user_id))
+        denied_records = guild_data.get("denied_until", {})
+        denied_until_raw = denied_records.get(cooldown_key(kind, user_id))
+        if kind == "partner_manager" and denied_until_raw is None:
+            denied_until_raw = denied_records.get(str(user_id))
         if denied_until_raw:
             try:
                 denied_until = datetime.fromisoformat(denied_until_raw)
@@ -425,21 +552,22 @@ class Applications(commands.Cog):
                 record
                 for record in guild_data.get("applications", {}).values()
                 if int(record.get("applicant_id", 0)) == user_id
+                and application_type(record) == kind
                 and record.get("status") in {"pending", "accepted"}
             ),
             None,
         )
         if existing:
             message = (
-                "Your application is already waiting for staff review."
+                f"Your {config['name']} application is already waiting for staff review."
                 if existing["status"] == "pending"
-                else "Your Partner Manager application has already been accepted."
+                else f"Your {config['name']} application has already been accepted."
             )
             await interaction.followup.send(message, ephemeral=True)
             return
-        if key in self.in_progress:
+        if any(active_guild == guild_id and active_user == user_id for active_guild, active_user, _ in self.in_progress):
             await interaction.followup.send(
-                "You already have an application in progress. Check your DMs.",
+                "You already have a staff application in progress. Finish or cancel it in your DMs first.",
                 ephemeral=True,
             )
             return
@@ -448,8 +576,11 @@ class Applications(commands.Cog):
             dm = await interaction.user.create_dm()
             await dm.send(
                 embed=discord.Embed(
-                    title="Partner Manager Application",
+                    title=f"{config['name']} Application",
                     description=(
+                        "**AI-generated or AI-rewritten answers are prohibited.** Your answers will be "
+                        "checked for possible AI-style writing and may be flagged for manual staff review. "
+                        "A flag is not proof of AI use.\n\n"
                         "I will send one question at a time. Reply in this DM to continue. "
                         "Type `cancel` at any time to stop. You have 15 minutes for each answer."
                     ),
@@ -465,12 +596,12 @@ class Applications(commands.Cog):
 
         self.in_progress.add(key)
         await interaction.followup.send(
-            "Application started — check your DMs from Density Bot.",
+            f"{config['name']} application started — check your DMs from Density Bot.",
             ephemeral=True,
         )
         asyncio.create_task(
-            self.run_questions(interaction.guild, interaction.user, dm),
-            name=f"partner-manager-application-{guild_id}-{user_id}",
+            self.run_questions(interaction.guild, interaction.user, dm, kind),
+            name=f"{kind}-application-{guild_id}-{user_id}",
         )
 
     async def run_questions(
@@ -478,13 +609,16 @@ class Applications(commands.Cog):
         guild: discord.Guild,
         applicant: discord.Member,
         dm: discord.DMChannel,
+        kind: str,
     ) -> None:
-        key = (guild.id, applicant.id)
+        config = application_config(kind)
+        questions = config["questions"]
+        key = (guild.id, applicant.id, kind)
         answers: list[str] = []
         try:
-            for index, question in enumerate(QUESTIONS, start=1):
+            for index, question in enumerate(questions, start=1):
                 embed = discord.Embed(
-                    title=f"Question {index} of {len(QUESTIONS)}",
+                    title=f"{config['name']} • Question {index} of {len(questions)}",
                     description=question,
                     color=discord.Color.blurple(),
                 )
@@ -513,16 +647,19 @@ class Applications(commands.Cog):
 
             record = {
                 "id": uuid.uuid4().hex[:12],
+                "application_type": kind,
                 "applicant_id": applicant.id,
                 "applicant_name": str(applicant),
                 "answers": answers,
+                "ai_check": ai_style_check(answers),
                 "status": "pending",
                 "submitted_at": datetime.now(UTC).isoformat(),
                 "pending_message_id": None,
             }
             channels = await self.ensure_channels(guild)
+            ai_prefix = "⚠️ **POSSIBLE AI USE — MANUAL REVIEW REQUIRED**\n" if record["ai_check"]["flagged"] else ""
             pending_message = await channels["pending"].send(
-                content=f"New Partner Manager application from {applicant.mention}",
+                content=f"{ai_prefix}New {config['name']} application from {applicant.mention}",
                 embed=application_embed(record, "pending"),
                 file=application_file(record),
                 view=ApplicationReviewView(self),
@@ -534,14 +671,14 @@ class Applications(commands.Cog):
             await dm.send(
                 embed=discord.Embed(
                     title="Application submitted",
-                    description="Your Partner Manager application was submitted successfully. Staff will review it.",
+                    description=f"Your {config['name']} application was submitted successfully. Staff will review it.",
                     color=discord.Color.green(),
                 )
             )
         except discord.Forbidden:
             log.info("Applicant %s closed DMs during an application", applicant.id)
         except discord.HTTPException:
-            log.exception("Partner Manager application failed for %s", applicant.id)
+            log.exception("%s application failed for %s", config["name"], applicant.id)
             try:
                 await dm.send("I could not submit your application. Please tell a staff member.")
             except discord.HTTPException:
@@ -567,11 +704,13 @@ class Applications(commands.Cog):
                 await interaction.followup.send("The applicant is no longer in the server.", ephemeral=True)
                 return
 
+            kind = application_type(record)
+            config = application_config(kind)
             roles = [
-                find_role(interaction.guild, PARTNER_MANAGER_ROLE_NAME),
+                find_role(interaction.guild, config["role"]),
                 find_role(interaction.guild, STAFF_TEAM_ROLE_NAME),
             ]
-            missing = [name for role, name in zip(roles, (PARTNER_MANAGER_ROLE_NAME, STAFF_TEAM_ROLE_NAME)) if role is None]
+            missing = [name for role, name in zip(roles, (config["role"], STAFF_TEAM_ROLE_NAME)) if role is None]
             if missing:
                 await interaction.followup.send(
                     f"I could not find these role(s): {', '.join(missing)}.",
@@ -580,21 +719,22 @@ class Applications(commands.Cog):
                 return
             if interaction.guild.me and any(role >= interaction.guild.me.top_role for role in roles if role):
                 await interaction.followup.send(
-                    "Move the Density Bot role above Partner Manager and Staff Team, then try again.",
+                    f"Move the Density Bot role above {config['role']} and Staff Team, then try again.",
                     ephemeral=True,
                 )
                 return
 
             await applicant.add_roles(
                 *(role for role in roles if role),
-                reason=f"Partner Manager application accepted by {interaction.user}",
+                reason=f"{config['name']} application accepted by {interaction.user}",
             )
             record["status"] = "accepted"
             record["reviewed_at"] = datetime.now(UTC).isoformat()
             record["reviewer_id"] = interaction.user.id
-            guild_record(self.data, interaction.guild.id).setdefault("denied_until", {}).pop(
-                str(applicant.id), None
-            )
+            denied_records = guild_record(self.data, interaction.guild.id).setdefault("denied_until", {})
+            denied_records.pop(cooldown_key(kind, applicant.id), None)
+            if kind == "partner_manager":
+                denied_records.pop(str(applicant.id), None)
             channels = await self.ensure_channels(interaction.guild)
             await channels["accepted"].send(
                 content=(
@@ -616,8 +756,8 @@ class Applications(commands.Cog):
                     embed=discord.Embed(
                         title="Application accepted!",
                         description=(
-                            "Your Partner Manager application was accepted. You have received the "
-                            f"**{PARTNER_MANAGER_ROLE_NAME}** and **{STAFF_TEAM_ROLE_NAME}** roles."
+                            f"Your {config['name']} application was accepted. You have received the "
+                            f"**{config['role']}** and **{STAFF_TEAM_ROLE_NAME}** roles."
                         ),
                         color=discord.Color.green(),
                     )
@@ -643,13 +783,15 @@ class Applications(commands.Cog):
                 await interaction.followup.send("This application has already been reviewed.", ephemeral=True)
                 return
             applicant_id = int(record["applicant_id"])
+            kind = application_type(record)
+            config = application_config(kind)
             denied_until = datetime.now(UTC) + timedelta(days=REAPPLY_DAYS)
             record["status"] = "denied"
             record["reviewed_at"] = datetime.now(UTC).isoformat()
             record["reviewer_id"] = interaction.user.id
             record["denial_reason"] = reason.strip()[:1000]
             guild_data = guild_record(self.data, interaction.guild.id)
-            guild_data.setdefault("denied_until", {})[str(applicant_id)] = denied_until.isoformat()
+            guild_data.setdefault("denied_until", {})[cooldown_key(kind, applicant_id)] = denied_until.isoformat()
             channels = await self.ensure_channels(interaction.guild)
             await channels["denied"].send(
                 content=(
@@ -672,8 +814,9 @@ class Applications(commands.Cog):
                     embed=discord.Embed(
                         title="Application denied",
                         description=(
-                            f"Your Partner Manager application was denied.\n\n**Reason:** {record['denial_reason']}\n\n"
-                            f"You can apply again <t:{int(denied_until.timestamp())}:R>."
+                            f"Your {config['name']} application was denied.\n\n**Reason:** {record['denial_reason']}\n\n"
+                            f"You can apply for {config['name']} again <t:{int(denied_until.timestamp())}:R>. "
+                            "This does not stop you applying for the other staff role."
                         ),
                         color=discord.Color.red(),
                     )
@@ -682,7 +825,7 @@ class Applications(commands.Cog):
                 dm_sent = False
             suffix = "" if dm_sent else " I could not DM the applicant."
             await interaction.followup.send(
-                f"Application denied. The two-week reapply lock is active.{suffix}",
+                f"Application denied. The two-week reapply lock is active for {config['name']} only.{suffix}",
                 ephemeral=True,
             )
 
