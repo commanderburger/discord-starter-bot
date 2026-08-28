@@ -817,19 +817,30 @@ class Tickets(commands.Cog):
             topic=with_topic_marker(interaction.channel.topic, "partner-mode", "auto-pending"),
             reason=f"Auto Partner started by {interaction.user}",
         )
+        no_ping_required = tier.required_ping.casefold().strip() in {"no ping", "none"}
+        posting_instruction = (
+            "Post the **Density SMP advertisement** in your server with **no ping at all**"
+            if no_ping_required
+            else "Post the **Density SMP advertisement** in your server using the required ping below"
+        )
+        required_ping_text = (
+            "**No ping** — do not include @everyone, @here, or a role mention"
+            if no_ping_required
+            else f"`{tier.required_ping}`"
+        )
         embed = discord.Embed(
             title="⚡ Auto Partner verification",
             description=(
-                "By choosing **Auto Partner**, you agreed to use the exact required ping Density Bot "
+                "By choosing **Auto Partner**, you agreed to follow the exact posting requirement Density Bot "
                 "gives you and to have your screenshot checked automatically.\n\n"
-                "Post the **Density SMP advertisement** in your server using the required ping below, "
+                f"{posting_instruction}, "
                 "then upload **one clear PNG or JPG screenshot** in this ticket.\n\n"
                 "Your screenshot must clearly show:\n"
                 "• the complete advert as a **sent Discord message** (not text waiting in the message box);\n"
                 "• the exact ping used at the top of the advert;\n"
                 "• enough of the Discord channel to show where it was posted; and\n"
                 "• readable, uncropped text with no edits covering the ping or advert.\n\n"
-                f"**Required ping:** `{tier.required_ping}`\n"
+                f"**Required ping:** {required_ping_text}\n"
                 f"**Matched tier:** {tier.label}\n\n"
                 "If the image is cropped, blurry, shows the wrong ping, or cannot be verified, it will "
                 "not be approved automatically and staff may need to review it."
@@ -900,13 +911,23 @@ class Tickets(commands.Cog):
             "required": ["decision", "detected_ping", "reason", "confidence"],
             "additionalProperties": False,
         }
-        prompt = (
-            "Verify this screenshot of a partnership advertisement in another Discord server. "
-            f"The required ping is exactly: {tier.required_ping!r}. Approve only when the screenshot "
-            "clearly shows a sent advertisement message using the correct ping. Reject when a clearly "
-            "different ping is visible. Use review when the ping, sent state, or advertisement is unclear, "
-            "cropped, edited, or unreadable. Never infer missing text."
-        )
+        no_ping_required = tier.required_ping.casefold().strip() in {"no ping", "none"}
+        if no_ping_required:
+            prompt = (
+                "Verify this screenshot of a partnership advertisement in another Discord server. "
+                "This tier requires no ping. Approve only when the screenshot clearly shows a sent "
+                "advertisement message and there is no @everyone, @here, or role ping attached to it. "
+                "Reject when any such ping is visible. Use review when the sent state, advertisement, "
+                "or absence of a ping is unclear, cropped, edited, or unreadable. Never infer missing text."
+            )
+        else:
+            prompt = (
+                "Verify this screenshot of a partnership advertisement in another Discord server. "
+                f"The required ping is exactly: {tier.required_ping!r}. Approve only when the screenshot "
+                "clearly shows a sent advertisement message using the correct ping. Reject when a clearly "
+                "different ping is visible. Use review when the ping, sent state, or advertisement is unclear, "
+                "cropped, edited, or unreadable. Never infer missing text."
+            )
         body = {
             "model": PARTNER_VISION_MODEL,
             "instructions": (
@@ -1797,3 +1818,4 @@ class Tickets(commands.Cog):
 
 async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(Tickets(bot))
+
