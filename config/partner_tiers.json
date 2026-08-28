@@ -23,8 +23,9 @@
   {
     "min_members": 400,
     "max_members": null,
-    "required_ping": "@everyone",
+    "required_ping": "no ping",
     "post_role": null,
-    "label": "400+ members — push for them to use @everyone while Density uses no ping"
+    "label": "400+ members — neither server uses a ping"
   }
 ]
+
