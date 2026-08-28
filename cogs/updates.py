@@ -13,7 +13,7 @@ from cogs.permissions import normalise_role_name
 log = logging.getLogger("starter-bot.updates")
 DATA_FILE = Path(os.getenv("BOT_DATA_DIR", "/data")) / "release-announcements.json"
 UPDATES_CHANNEL_NAME = os.getenv("BOT_UPDATES_CHANNEL", "bot-updates")
-RELEASE_ID = "2026-08-28-helper-applications-ai-review-v18"
+RELEASE_ID = "2026-08-28-ticket-claim-button-v19"
 
 
 def load_announced_releases() -> set[str]:
@@ -83,12 +83,11 @@ class Updates(commands.Cog):
                 embed = discord.Embed(
                     title="Density Bot Update",
                     description=(
-                        "• Added a separate **Helper application** using the existing staff questions.\n"
-                        "• The panel now offers Partner Manager and Helper applications.\n"
-                        "• Applicants are warned that AI-generated or AI-rewritten answers are prohibited.\n"
-                        "• Possible AI-style writing is flagged for manual review and never treated as proof by itself.\n"
-                        "• Accepted Helper applicants automatically receive Helper and Staff Team.\n"
-                        "• Each role has its own 14-day denial cooldown, so a denial for one does not block the other."
+                        "• Added a persistent **Claim ticket** button to ticket controls.\n"
+                        "• Only configured staff roles can use the button.\n"
+                        "• The ticket records and announces which staff member claimed it.\n"
+                        "• Other staff cannot take an already claimed ticket.\n"
+                        "• Existing open tickets receive the new button when the bot starts."
                     ),
                     color=discord.Color.blurple(),
                     timestamp=discord.utils.utcnow(),

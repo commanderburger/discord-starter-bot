@@ -25,7 +25,13 @@ from cogs.permissions import (
     role_is_staff,
     senior_role_names,
 )
-from cogs.tickets import CloseTicketView, Tickets, ticket_owner_id, ticket_type_id
+from cogs.tickets import (
+    CloseTicketView,
+    Tickets,
+    ticket_claimed_by,
+    ticket_owner_id,
+    ticket_type_id,
+)
 from cogs.welcome import SERVER_NAME, ordinal
 
 
@@ -623,6 +629,46 @@ class StaffTools(commands.Cog):
         owner_id = ticket_owner_id(channel) if channel else None
         return channel, owner_id
 
+    async def claim_ticket_channel(
+        self,
+        channel: discord.TextChannel,
+        staff: discord.Member,
+        builder_ign: str = "",
+    ) -> tuple[bool, str]:
+        """Claim a ticket from either the button or the legacy command."""
+
+        if ticket_owner_id(channel) is None or channel.guild is None:
+            return False, "Use this inside a ticket channel."
+
+        claimed_by = ticket_claimed_by(channel)
+        if claimed_by is not None and claimed_by != staff.id:
+            return False, f"This ticket is already claimed by <@{claimed_by}>."
+        if claimed_by == staff.id and not builder_ign:
+            return False, "You have already claimed this ticket."
+
+        async with self.data_lock:
+            data = load_data()
+            claims = guild_record(data, channel.guild.id).setdefault("claims", {})
+            current = claims.get(str(channel.id))
+            if isinstance(current, dict):
+                current_staff_id = int(current.get("staff_id", 0))
+                if current_staff_id and current_staff_id != staff.id:
+                    return False, f"This ticket is already claimed by <@{current_staff_id}>."
+            claims[str(channel.id)] = {
+                "staff_id": staff.id,
+                "builder_ign": builder_ign[:32],
+                "claimed_at": datetime.now(UTC).isoformat(),
+            }
+            await self.persist(data)
+
+        topic = update_topic_token(channel.topic, "density-ticket-claimed", str(staff.id))
+        if builder_ign:
+            clean_ign = re.sub(r"[^A-Za-z0-9_]", "", builder_ign)[:32]
+            topic = update_topic_token(topic, "density-builder-ign", clean_ign)
+        await channel.edit(topic=topic[:1024], reason=f"Ticket claimed by {staff}")
+        note = f" for builder IGN `{builder_ign}`" if builder_ign else ""
+        return True, f"✅ {staff.mention} claimed this ticket{note}."
+
     @commands.command(name="claim")
     @staff_command()
     async def claim(self, ctx: commands.Context, *, builder_ign: str = "") -> None:
@@ -630,25 +676,11 @@ class StaffTools(commands.Cog):
         if channel is None or owner_id is None or ctx.guild is None:
             await ctx.reply("Use this inside a ticket channel.")
             return
-        async with self.data_lock:
-            data = load_data()
-            claims = guild_record(data, ctx.guild.id).setdefault("claims", {})
-            current = claims.get(str(channel.id))
-            if isinstance(current, dict) and int(current.get("staff_id", 0)) != ctx.author.id:
-                await ctx.reply(f"This ticket is already claimed by <@{current.get('staff_id')}>.")
-                return
-            claims[str(channel.id)] = {
-                "staff_id": ctx.author.id,
-                "builder_ign": builder_ign[:32],
-                "claimed_at": datetime.now(UTC).isoformat(),
-            }
-            await self.persist(data)
-        topic = update_topic_token(channel.topic, "density-ticket-claimed", str(ctx.author.id))
-        if builder_ign:
-            topic = update_topic_token(topic, "density-builder-ign", re.sub(r"[^A-Za-z0-9_]", "", builder_ign)[:32])
-        await channel.edit(topic=topic[:1024], reason=f"Ticket claimed by {ctx.author}")
-        note = f" for builder IGN `{builder_ign}`" if builder_ign else ""
-        await ctx.send(f"✅ {ctx.author.mention} claimed this ticket{note}.")
+        claimed, message = await self.claim_ticket_channel(channel, ctx.author, builder_ign)
+        if claimed:
+            await ctx.send(message)
+        else:
+            await ctx.reply(message)
 
     @commands.command(name="unclaim")
     @staff_command()

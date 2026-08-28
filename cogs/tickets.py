@@ -169,6 +169,11 @@ def ticket_type_id(channel: discord.TextChannel) -> str | None:
     return match.group(1) if match else None
 
 
+def ticket_claimed_by(channel: discord.TextChannel) -> int | None:
+    match = re.search(r"density-ticket-claimed:(\d+)", channel.topic or "")
+    return int(match.group(1)) if match else None
+
+
 def topic_marker(channel: discord.TextChannel, name: str) -> str | None:
     match = re.search(rf"density-{re.escape(name)}:([^\s]+)", channel.topic or "")
     return match.group(1) if match else None
@@ -513,6 +518,52 @@ class CloseTicketView(discord.ui.View):
     def __init__(self, cog: "Tickets") -> None:
         super().__init__(timeout=None)
         self.cog = cog
+
+    @discord.ui.button(
+        label="Claim ticket",
+        style=discord.ButtonStyle.success,
+        emoji="🙋",
+        custom_id="density-ticket-claim-v1",
+    )
+    async def claim_ticket(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ) -> None:
+        del button
+        if not isinstance(interaction.channel, discord.TextChannel):
+            await interaction.response.send_message("This is not a ticket channel.", ephemeral=True)
+            return
+        if ticket_owner_id(interaction.channel) is None:
+            await interaction.response.send_message("This is not one of my ticket channels.", ephemeral=True)
+            return
+        if not member_is_staff(interaction):
+            await interaction.response.send_message(
+                "Only a staff member can claim this ticket.",
+                ephemeral=True,
+            )
+            return
+
+        staff_tools = self.cog.bot.get_cog("StaffTools")
+        claim_handler = getattr(staff_tools, "claim_ticket_channel", None)
+        if claim_handler is None:
+            await interaction.response.send_message(
+                "The ticket claim system is temporarily unavailable.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        claimed, message = await claim_handler(interaction.channel, interaction.user)
+        if not claimed:
+            await interaction.followup.send(message, ephemeral=True)
+            return
+
+        await interaction.channel.send(
+            message,
+            allowed_mentions=discord.AllowedMentions(users=[interaction.user]),
+        )
+        await interaction.followup.send("You have claimed this ticket.", ephemeral=True)
 
     @discord.ui.button(
         label="Close ticket",
@@ -1678,6 +1729,32 @@ class Tickets(commands.Cog):
                     await self.send_panel(channel)
                     log.info("Posted the Density SMP ticket panel in #%s", channel.name)
 
+    async def ensure_open_ticket_controls(self) -> None:
+        """Add the current persistent ticket buttons to existing open tickets."""
+
+        for guild in self.bot.guilds:
+            for channel in guild.text_channels:
+                if (
+                    ticket_owner_id(channel) is None
+                    or "density-ticket-open:true" not in (channel.topic or "")
+                ):
+                    continue
+                try:
+                    async for message in channel.history(limit=50, oldest_first=True):
+                        if message.author.id != self.bot.user.id:
+                            continue
+                        component_ids = {
+                            getattr(component, "custom_id", None)
+                            for row in message.components
+                            for component in getattr(row, "children", [])
+                        }
+                        if "density-ticket-close-v1" not in component_ids:
+                            continue
+                        await message.edit(view=CloseTicketView(self))
+                        break
+                except discord.HTTPException:
+                    log.warning("Could not refresh ticket controls in #%s", channel.name)
+
     @commands.Cog.listener()
     async def on_ready(self) -> None:
         if self.panel_checked:
@@ -1685,6 +1762,7 @@ class Tickets(commands.Cog):
         self.panel_checked = True
         try:
             await self.ensure_panel()
+            await self.ensure_open_ticket_controls()
         except discord.HTTPException:
             self.panel_checked = False
             log.exception("Could not set up the ticket panel")
@@ -1719,4 +1797,3 @@ class Tickets(commands.Cog):
 
 async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(Tickets(bot))
-
