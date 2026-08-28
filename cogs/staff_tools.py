@@ -41,8 +41,9 @@ LEVEL_DATA_FILE = Path(os.getenv("BOT_DATA_DIR", "/data")) / "levels.json"
 STAFF_ACTIVITY_CHANNEL = os.getenv("STAFF_ACTIVITY_CHANNEL", "staff-activity")
 STAFF_PUNISHMENTS_CHANNEL = os.getenv("STAFF_PUNISHMENTS_CHANNEL", "staff-punishments")
 STAFF_PING_ROLE = os.getenv("STAFF_ACTIVITY_PING_ROLE", "Staff Team")
-ACTIVITY_INTERVAL_SECONDS = max(86_400, int(os.getenv("STAFF_ACTIVITY_INTERVAL_SECONDS", "432000")))
+ACTIVITY_INTERVAL_SECONDS = max(86_400, int(os.getenv("STAFF_ACTIVITY_INTERVAL_SECONDS", "259200")))
 ACTIVITY_WINDOW_SECONDS = max(3600, int(os.getenv("STAFF_ACTIVITY_WINDOW_SECONDS", "86400")))
+ACTIVITY_SCHEDULE_VERSION = "three-day-v1"
 DONUT_STATS_URL = os.getenv("DONUT_STATS_API_URL", "https://api.donutsmp.net/v1/stats/{ign}")
 DONUT_API_KEY = os.getenv("DONUT_API_KEY", "").strip()
 TIMEZONE = ZoneInfo(os.getenv("BOT_TIMEZONE", "Europe/London"))
@@ -524,8 +525,20 @@ class StaffTools(commands.Cog):
             async with self.data_lock:
                 data = load_data()
                 activity = guild_record(data, guild.id).setdefault("activity", {})
-                if not activity.get("next_post_at"):
+                changed = False
+                if activity.get("schedule_version") != ACTIVITY_SCHEDULE_VERSION:
+                    active = activity.get("active_check")
+                    if isinstance(active, dict) and not active.get("closed"):
+                        active["closed"] = True
+                        active["closed_at"] = int(datetime.now(UTC).timestamp())
+                        active["close_reason"] = "Replaced by the new three-day activity schedule"
+                    activity["schedule_version"] = ACTIVITY_SCHEDULE_VERSION
                     activity["next_post_at"] = int(datetime.now(UTC).timestamp()) + 15
+                    changed = True
+                elif not activity.get("next_post_at"):
+                    activity["next_post_at"] = int(datetime.now(UTC).timestamp()) + 15
+                    changed = True
+                if changed:
                     await self.persist(data)
 
     @commands.Cog.listener()

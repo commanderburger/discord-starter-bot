@@ -23,7 +23,9 @@ DENIED_CHANNEL_NAME = os.getenv("STAFF_APPLICATION_DENIED_CHANNEL", "denied")
 PARTNER_MANAGER_ROLE_NAME = os.getenv("PARTNER_MANAGER_ROLE", "Partner Manager")
 HELPER_ROLE_NAME = os.getenv("HELPER_ROLE", "Helper")
 STAFF_TEAM_ROLE_NAME = os.getenv("STAFF_TEAM_ROLE", "Staff Team")
+HIGH_STAFF_CHANNEL_NAME = os.getenv("HIGH_STAFF_CHANNEL", "high-staff")
 PANEL_MARKER = "Density Staff Applications v2"
+CONTROL_PANEL_MARKER = "Density Staff Application Controls v1"
 try:
     REAPPLY_DAYS = max(1, int(os.getenv("STAFF_APPLICATION_REAPPLY_DAYS", "14")))
 except ValueError:
@@ -113,10 +115,24 @@ def save_data(value: dict) -> None:
 
 
 def guild_record(data: dict, guild_id: int) -> dict:
-    return data.setdefault("guilds", {}).setdefault(
+    record = data.setdefault("guilds", {}).setdefault(
         str(guild_id),
-        {"applications": {}, "denied_until": {}, "panel_message_id": None},
+        {
+            "applications": {},
+            "denied_until": {},
+            "panel_message_id": None,
+            "control_message_id": None,
+            "paused": {"partner_manager": False, "helper": False},
+        },
     )
+    record.setdefault("applications", {})
+    record.setdefault("denied_until", {})
+    record.setdefault("panel_message_id", None)
+    record.setdefault("control_message_id", None)
+    paused = record.setdefault("paused", {})
+    paused.setdefault("partner_manager", False)
+    paused.setdefault("helper", False)
+    return record
 
 
 def application_type(record: dict) -> str:
@@ -318,9 +334,12 @@ def application_embed(record: dict, status: str, reviewer: discord.abc.User | No
 
 
 class ApplicationPanelView(discord.ui.View):
-    def __init__(self, cog: "Applications") -> None:
+    def __init__(self, cog: "Applications", guild_id: int | None = None) -> None:
         super().__init__(timeout=None)
         self.cog = cog
+        if guild_id is not None:
+            self.apply.disabled = cog.is_application_paused(guild_id, "partner_manager")
+            self.apply_helper.disabled = cog.is_application_paused(guild_id, "helper")
 
     @discord.ui.button(
         label="Apply for Partner Manager",
@@ -339,6 +358,41 @@ class ApplicationPanelView(discord.ui.View):
     )
     async def apply_helper(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
         await self.cog.start_application(interaction, "helper")
+
+
+class ApplicationControlView(discord.ui.View):
+    def __init__(self, cog: "Applications", guild_id: int | None = None) -> None:
+        super().__init__(timeout=None)
+        self.cog = cog
+        if guild_id is not None:
+            partner_paused = cog.is_application_paused(guild_id, "partner_manager")
+            helper_paused = cog.is_application_paused(guild_id, "helper")
+            self.toggle_partner.label = f"Partner Manager: {'Paused' if partner_paused else 'Open'}"
+            self.toggle_partner.style = (
+                discord.ButtonStyle.danger if partner_paused else discord.ButtonStyle.success
+            )
+            self.toggle_helper.label = f"Helper: {'Paused' if helper_paused else 'Open'}"
+            self.toggle_helper.style = (
+                discord.ButtonStyle.danger if helper_paused else discord.ButtonStyle.success
+            )
+
+    @discord.ui.button(
+        label="Partner Manager: Open",
+        emoji="🤝",
+        style=discord.ButtonStyle.success,
+        custom_id="density-toggle-partner-manager-applications-v1",
+    )
+    async def toggle_partner(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+        await self.cog.toggle_application(interaction, "partner_manager")
+
+    @discord.ui.button(
+        label="Helper: Open",
+        emoji="🛠️",
+        style=discord.ButtonStyle.success,
+        custom_id="density-toggle-helper-applications-v1",
+    )
+    async def toggle_helper(self, interaction: discord.Interaction, _: discord.ui.Button) -> None:
+        await self.cog.toggle_application(interaction, "helper")
 
 
 class DenialReasonModal(discord.ui.Modal, title="Deny Staff Application"):
@@ -410,7 +464,11 @@ class Applications(commands.Cog):
         self.decision_lock = asyncio.Lock()
         self.ready_complete = False
         self.bot.add_view(ApplicationPanelView(self))
+        self.bot.add_view(ApplicationControlView(self))
         self.bot.add_view(ApplicationReviewView(self))
+
+    def is_application_paused(self, guild_id: int, kind: str) -> bool:
+        return bool(guild_record(self.data, guild_id).setdefault("paused", {}).get(kind, False))
 
     def record_for_message(self, guild_id: int, message_id: int) -> dict | None:
         guild_data = guild_record(self.data, guild_id)
@@ -457,11 +515,15 @@ class Applications(commands.Cog):
             channels[status] = channel
         return channels
 
-    def panel_embed(self) -> discord.Embed:
+    def panel_embed(self, guild_id: int) -> discord.Embed:
+        partner_status = "🔴 Paused" if self.is_application_paused(guild_id, "partner_manager") else "🟢 Open"
+        helper_status = "🔴 Paused" if self.is_application_paused(guild_id, "helper") else "🟢 Open"
         embed = discord.Embed(
             title="📝 Density SMP Staff Applications",
             description=(
                 "Choose the role you want to apply for below.\n\n"
+                f"**Partner Manager:** {partner_status}\n"
+                f"**Helper:** {helper_status}\n\n"
                 "• Applications are completed privately in DMs, one question at a time.\n"
                 "• **AI-generated or AI-rewritten answers are prohibited.**\n"
                 "• Submissions are checked for possible AI-style writing and may be flagged for manual review.\n"
@@ -481,7 +543,10 @@ class Applications(commands.Cog):
         if stored_id:
             try:
                 message = await panel.fetch_message(int(stored_id))
-                await message.edit(embed=self.panel_embed(), view=ApplicationPanelView(self))
+                await message.edit(
+                    embed=self.panel_embed(guild.id),
+                    view=ApplicationPanelView(self, guild.id),
+                )
                 return
             except (discord.NotFound, discord.Forbidden, discord.HTTPException, ValueError):
                 guild_data["panel_message_id"] = None
@@ -492,13 +557,115 @@ class Applications(commands.Cog):
                 for embed in message.embeds
             ):
                 guild_data["panel_message_id"] = message.id
-                await message.edit(embed=self.panel_embed(), view=ApplicationPanelView(self))
+                await message.edit(
+                    embed=self.panel_embed(guild.id),
+                    view=ApplicationPanelView(self, guild.id),
+                )
                 save_data(self.data)
                 return
 
-        message = await panel.send(embed=self.panel_embed(), view=ApplicationPanelView(self))
+        message = await panel.send(
+            embed=self.panel_embed(guild.id),
+            view=ApplicationPanelView(self, guild.id),
+        )
         guild_data["panel_message_id"] = message.id
         save_data(self.data)
+
+    def high_staff_channel(self, guild: discord.Guild) -> discord.TextChannel | None:
+        candidates = {
+            normalise_role_name(HIGH_STAFF_CHANNEL_NAME),
+            normalise_role_name("high-staff"),
+            normalise_role_name("high-staff-chat"),
+        }
+        exact = discord.utils.find(
+            lambda channel: isinstance(channel, discord.TextChannel)
+            and normalise_role_name(channel.name) in candidates,
+            guild.channels,
+        )
+        if isinstance(exact, discord.TextChannel):
+            return exact
+        return discord.utils.find(
+            lambda channel: isinstance(channel, discord.TextChannel)
+            and "highstaff" in normalise_role_name(channel.name),
+            guild.channels,
+        )
+
+    def control_embed(self, guild_id: int) -> discord.Embed:
+        partner_paused = self.is_application_paused(guild_id, "partner_manager")
+        helper_paused = self.is_application_paused(guild_id, "helper")
+        embed = discord.Embed(
+            title="⚙️ Staff Application Controls",
+            description=(
+                "Owner, Co-Owner, and Manager can pause or reopen each application separately. "
+                "When paused, its public application button is disabled and new applications cannot start.\n\n"
+                f"**Partner Manager:** {'🔴 Paused' if partner_paused else '🟢 Open'}\n"
+                f"**Helper:** {'🔴 Paused' if helper_paused else '🟢 Open'}"
+            ),
+            color=discord.Color.orange() if partner_paused or helper_paused else discord.Color.green(),
+        )
+        embed.set_footer(text=CONTROL_PANEL_MARKER)
+        return embed
+
+    async def ensure_control_panel(self, guild: discord.Guild) -> None:
+        channel = self.high_staff_channel(guild)
+        if channel is None:
+            log.warning("No high-staff channel found in %s; application controls were not posted", guild.name)
+            return
+        guild_data = guild_record(self.data, guild.id)
+        stored_id = guild_data.get("control_message_id")
+        if stored_id:
+            try:
+                message = await channel.fetch_message(int(stored_id))
+                await message.edit(
+                    embed=self.control_embed(guild.id),
+                    view=ApplicationControlView(self, guild.id),
+                )
+                return
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException, ValueError):
+                guild_data["control_message_id"] = None
+
+        async for message in channel.history(limit=50):
+            if message.author.id == self.bot.user.id and any(
+                embed.footer and embed.footer.text == CONTROL_PANEL_MARKER
+                for embed in message.embeds
+            ):
+                guild_data["control_message_id"] = message.id
+                await message.edit(
+                    embed=self.control_embed(guild.id),
+                    view=ApplicationControlView(self, guild.id),
+                )
+                save_data(self.data)
+                return
+
+        message = await channel.send(
+            embed=self.control_embed(guild.id),
+            view=ApplicationControlView(self, guild.id),
+        )
+        guild_data["control_message_id"] = message.id
+        save_data(self.data)
+
+    async def toggle_application(self, interaction: discord.Interaction, kind: str) -> None:
+        if interaction.guild is None or not member_is_senior(interaction):
+            await interaction.response.send_message(
+                "Only Owner, Co-Owner, or Manager can change application availability.",
+                ephemeral=True,
+            )
+            return
+        await interaction.response.defer(ephemeral=True)
+        config = application_config(kind)
+        guild_data = guild_record(self.data, interaction.guild.id)
+        paused = guild_data.setdefault("paused", {})
+        paused[kind] = not bool(paused.get(kind, False))
+        save_data(self.data)
+        channels = await self.ensure_channels(interaction.guild)
+        await self.ensure_panel(interaction.guild, channels["panel"])
+        if interaction.message is not None:
+            await interaction.message.edit(
+                embed=self.control_embed(interaction.guild.id),
+                view=ApplicationControlView(self, interaction.guild.id),
+            )
+        state = "paused" if paused[kind] else "reopened"
+        await interaction.followup.send(f"{config['name']} applications are now **{state}**.", ephemeral=True)
 
     @commands.Cog.listener()
     async def on_ready(self) -> None:
@@ -510,6 +677,7 @@ class Applications(commands.Cog):
                 try:
                     channels = await self.ensure_channels(guild)
                     await self.ensure_panel(guild, channels["panel"])
+                    await self.ensure_control_panel(guild)
                 except discord.Forbidden:
                     log.warning("Missing permission to set up staff applications in %s", guild.name)
                 except discord.HTTPException:
@@ -530,6 +698,13 @@ class Applications(commands.Cog):
         key = (guild_id, user_id, kind)
         guild_data = guild_record(self.data, guild_id)
         now = datetime.now(UTC)
+
+        if self.is_application_paused(guild_id, kind):
+            await interaction.followup.send(
+                f"{config['name']} applications are temporarily paused by high staff. Please check again later.",
+                ephemeral=True,
+            )
+            return
 
         denied_records = guild_data.get("denied_until", {})
         denied_until_raw = denied_records.get(cooldown_key(kind, user_id))

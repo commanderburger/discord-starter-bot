@@ -148,7 +148,7 @@ def guide_embeds() -> list[discord.Embed]:
     third.add_field(
         name="Automatic staff activity",
         value=(
-            "A check is posted in `#staff-activity` every five days. Eligible staff must react ✅ "
+            "A check is posted in `#staff-activity` every three days. Eligible staff must react ✅ "
             "within 24 hours. Owner, Co Owner, and Manager are exempt. Missed checks are recorded "
             "as strikes in `#staff-punishments`."
         ),
@@ -174,12 +174,20 @@ def guide_embeds() -> list[discord.Embed]:
         name="Slash moderation, tickets & giveaways",
         value=(
             "`/ban` / `/kick` — senior removals\n"
-            "`/mute` / `/tempmute` / `/unmute` — member timeouts\n"
+            "`/mute` — permanent mute until `/unmute` · `/tempmute` — timed mute\n"
             "`/purge` — delete messages\n"
             "`/warn` / `/warnings` / `/clearwarnings` — warning records\n"
             "`/ticketsetup` — post a ticket panel (**Senior**)\n"
             "`/gcreate` / `/gend` / `/greroll` — giveaway controls\n"
             "`/autogcreate` / `/autoglist` / `/autogstop` — automatic giveaways"
+        ),
+        inline=False,
+    )
+    fourth.add_field(
+        name="Application controls",
+        value=(
+            "In the high-staff channel, Owner, Co Owner, and Manager can use the two control buttons "
+            "to pause or reopen Partner Manager and Helper applications separately."
         ),
         inline=False,
     )

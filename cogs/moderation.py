@@ -17,6 +17,11 @@ log = logging.getLogger("starter-bot.moderation")
 DATA_DIR = Path(os.getenv("BOT_DATA_DIR", "/data"))
 WARNINGS_FILE = DATA_DIR / "moderation.json"
 MAX_TIMEOUT = timedelta(days=28)
+MUTE_ROLE_NAME = os.getenv("MUTE_ROLE_NAME", "Muted")
+try:
+    DENSITY_GUILD_ID = int(os.getenv("DENSITY_GUILD_ID", "1525352205610127370"))
+except ValueError:
+    DENSITY_GUILD_ID = 1525352205610127370
 DISCORD_INVITE_RE = re.compile(
     r"(?:https?://)?(?:www\.)?(?:discord(?:app)?\.com/invite|discord\.gg)/[a-z0-9-]+",
     re.IGNORECASE,
@@ -67,10 +72,83 @@ class Moderation(commands.Cog):
     def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
         self.warning_lock = asyncio.Lock()
+        self.mute_lock = asyncio.Lock()
         configured = os.getenv("INVITE_EXEMPT_CHANNELS", "partners,announcements,our-ad,ad")
         self.exempt_channels = {
             normalise_channel_name(name) for name in configured.split(",") if name.strip()
         }
+
+    @staticmethod
+    def muted_role(guild: discord.Guild) -> discord.Role | None:
+        wanted = normalise_channel_name(MUTE_ROLE_NAME)
+        return discord.utils.find(
+            lambda role: normalise_channel_name(role.name) == wanted,
+            guild.roles,
+        )
+
+    @staticmethod
+    async def apply_mute_overwrite(
+        channel: discord.abc.GuildChannel,
+        role: discord.Role,
+    ) -> None:
+        overwrite = channel.overwrites_for(role)
+        required = {
+            "send_messages": False,
+            "add_reactions": False,
+            "create_public_threads": False,
+            "create_private_threads": False,
+            "send_messages_in_threads": False,
+            "speak": False,
+            "stream": False,
+        }
+        if all(getattr(overwrite, name) is value for name, value in required.items()):
+            return
+        for name, value in required.items():
+            setattr(overwrite, name, value)
+        await channel.set_permissions(role, overwrite=overwrite, reason="Density permanent mute setup")
+
+    async def ensure_mute_role(self, guild: discord.Guild) -> discord.Role:
+        async with self.mute_lock:
+            role = self.muted_role(guild)
+            if role is None:
+                role = await guild.create_role(
+                    name=MUTE_ROLE_NAME,
+                    permissions=discord.Permissions.none(),
+                    reason="Density permanent mute role",
+                )
+            bot_member = guild.me
+            if bot_member is not None and role >= bot_member.top_role:
+                raise RuntimeError(f"Move the Density Bot role above {role.name} first.")
+            for channel in guild.channels:
+                try:
+                    await self.apply_mute_overwrite(channel, role)
+                except discord.Forbidden as error:
+                    raise RuntimeError(
+                        "Give Density Bot Manage Channels so it can configure the permanent mute role."
+                    ) from error
+                except discord.HTTPException:
+                    log.exception("Could not configure permanent mute permissions in %s", channel)
+            return role
+
+    @commands.Cog.listener()
+    async def on_ready(self) -> None:
+        for guild in self.bot.guilds:
+            if DENSITY_GUILD_ID and guild.id != DENSITY_GUILD_ID:
+                continue
+            try:
+                await self.ensure_mute_role(guild)
+            except (discord.Forbidden, discord.HTTPException, RuntimeError) as error:
+                log.warning("Could not prepare permanent mutes in %s: %s", guild.name, error)
+
+    @commands.Cog.listener()
+    async def on_guild_channel_create(self, channel: discord.abc.GuildChannel) -> None:
+        role = self.muted_role(channel.guild)
+        if role is None:
+            return
+        try:
+            await self.apply_mute_overwrite(channel, role)
+        except (discord.Forbidden, discord.HTTPException):
+            log.warning("Could not apply permanent mute permissions to new channel %s", channel)
 
     def channel_is_exempt(self, channel: discord.abc.GuildChannel | discord.Thread) -> bool:
         names = {normalise_channel_name(channel.name)}
@@ -172,10 +250,35 @@ class Moderation(commands.Cog):
         await interaction.response.send_message(f"Kicked **{member}**. Reason: {reason}")
         await self.send_mod_log(interaction.guild, "Member kicked", f"{member} was kicked by {interaction.user.mention}.\nReason: {reason}")
 
-    @app_commands.command(name="mute", description="Mute a member for 24 hours")
+    @app_commands.command(name="mute", description="Permanently mute a member until /unmute")
     @staff_only("moderate_members")
     async def mute(self, interaction: discord.Interaction, member: discord.Member, reason: str = "No reason provided") -> None:
-        await self.apply_timeout(interaction, member, timedelta(hours=24), reason)
+        if error := self.target_allowed(interaction, member):
+            await interaction.response.send_message(error, ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        try:
+            role = await self.ensure_mute_role(interaction.guild)
+            await member.timeout(None, reason=f"Permanent mute applied by {interaction.user}")
+            await member.add_roles(role, reason=f"{reason} — by {interaction.user}")
+        except RuntimeError as error:
+            await interaction.followup.send(str(error), ephemeral=True)
+            return
+        except discord.Forbidden:
+            await interaction.followup.send(
+                "Discord blocked the permanent mute. Move Density Bot above the Muted role and give it Manage Roles and Manage Channels.",
+                ephemeral=True,
+            )
+            return
+        await interaction.followup.send(
+            f"Permanently muted {member.mention} until `/unmute` is used. Reason: {reason}",
+            ephemeral=True,
+        )
+        await self.send_mod_log(
+            interaction.guild,
+            "Member permanently muted",
+            f"{member.mention} was permanently muted by {interaction.user.mention}.\nReason: {reason}",
+        )
 
     @app_commands.command(name="tempmute", description="Mute a member for a chosen time")
     @app_commands.describe(duration="Examples: 30m, 2h, 3d, 1w")
@@ -203,7 +306,10 @@ class Moderation(commands.Cog):
         if error := self.target_allowed(interaction, member):
             await interaction.response.send_message(error, ephemeral=True)
             return
+        role = self.muted_role(interaction.guild)
         await member.timeout(None, reason=f"{reason} — by {interaction.user}")
+        if role is not None and role in member.roles:
+            await member.remove_roles(role, reason=f"{reason} — by {interaction.user}")
         await interaction.response.send_message(f"Unmuted {member.mention}.")
         await self.send_mod_log(interaction.guild, "Member unmuted", f"{member.mention} was unmuted by {interaction.user.mention}.\nReason: {reason}")
 
