@@ -41,6 +41,7 @@ LEVEL_DATA_FILE = Path(os.getenv("BOT_DATA_DIR", "/data")) / "levels.json"
 STAFF_ACTIVITY_CHANNEL = os.getenv("STAFF_ACTIVITY_CHANNEL", "staff-activity")
 STAFF_PUNISHMENTS_CHANNEL = os.getenv("STAFF_PUNISHMENTS_CHANNEL", "staff-punishments")
 STAFF_PING_ROLE = os.getenv("STAFF_ACTIVITY_PING_ROLE", "Staff Team")
+DENSITY_GUILD_ID = int(os.getenv("DENSITY_GUILD_ID", "1525352205610127370"))
 ACTIVITY_INTERVAL_SECONDS = max(86_400, int(os.getenv("STAFF_ACTIVITY_INTERVAL_SECONDS", "259200")))
 ACTIVITY_WINDOW_SECONDS = max(3600, int(os.getenv("STAFF_ACTIVITY_WINDOW_SECONDS", "86400")))
 ACTIVITY_SCHEDULE_VERSION = "three-day-v1"
@@ -520,6 +521,8 @@ class StaffTools(commands.Cog):
             return
         self.ready_once = True
         for guild in self.bot.guilds:
+            if guild.id != DENSITY_GUILD_ID:
+                continue
             await self.ensure_staff_channel(guild, STAFF_ACTIVITY_CHANNEL)
             await self.ensure_staff_channel(guild, STAFF_PUNISHMENTS_CHANNEL)
             async with self.data_lock:
@@ -1490,6 +1493,8 @@ class StaffTools(commands.Cog):
     async def activity_loop(self) -> None:
         now = int(datetime.now(UTC).timestamp())
         for guild in self.bot.guilds:
+            if guild.id != DENSITY_GUILD_ID:
+                continue
             data = load_data()
             activity = guild_record(data, guild.id).setdefault("activity", {})
             active = activity.get("active_check")
