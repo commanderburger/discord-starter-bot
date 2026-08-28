@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import hashlib
 import io
 import json
@@ -12,6 +13,7 @@ import aiohttp
 import discord
 from discord import app_commands
 from discord.ext import commands
+from PIL import Image, ImageEnhance, ImageFilter, ImageOps, UnidentifiedImageError
 
 from cogs.permissions import (
     SeniorStaffOnly,
@@ -60,7 +62,7 @@ PARTNER_VISION_MODEL = os.getenv(
     "PARTNER_VISION_MODEL",
     os.getenv("OPENAI_MODEL", "gpt-5-mini"),
 ).strip() or "gpt-5-mini"
-PARTNER_VISION_TIMEOUT = 60
+PARTNER_VISION_TIMEOUT = 90
 PARTNER_APPROVAL_CONFIDENCE = 0.85
 PARTNER_LEARNING_CONFIDENCE = 0.75
 PARTNER_APPLICATION_FOOTER = "Density SMP Partner Application"
@@ -88,6 +90,63 @@ class PartnerTier:
         return member_count >= self.min_members and (
             self.max_members is None or member_count <= self.max_members
         )
+
+
+def _partner_image_variants(image_bytes: bytes) -> list[tuple[str, str]]:
+    """Create a readable full view and overlapping zooms for vision verification."""
+    with Image.open(io.BytesIO(image_bytes)) as opened:
+        image = ImageOps.exif_transpose(opened)
+        if getattr(image, "is_animated", False):
+            image.seek(0)
+        if image.mode != "RGB":
+            background = Image.new("RGB", image.size, "white")
+            if "A" in image.getbands():
+                background.paste(image, mask=image.getchannel("A"))
+            else:
+                background.paste(image.convert("RGB"))
+            image = background
+        else:
+            image = image.copy()
+
+    width, height = image.size
+    if width < 320 or height < 240:
+        raise ValueError("Screenshot is too small to verify")
+
+    crops: list[tuple[str, Image.Image]] = [("enhanced full screenshot", image)]
+    if width >= 700 and height >= 450:
+        crop_width = max(1, round(width * 0.70))
+        crop_height = max(1, round(height * 0.70))
+        positions = [
+            (0, 0, "top-left zoom"),
+            (width - crop_width, 0, "top-right zoom"),
+            (0, height - crop_height, "bottom-left zoom"),
+            (width - crop_width, height - crop_height, "bottom-right zoom"),
+        ]
+        crops.extend(
+            (
+                label,
+                image.crop((left, top, left + crop_width, top + crop_height)),
+            )
+            for left, top, label in positions
+        )
+
+    encoded: list[tuple[str, str]] = []
+    for label, variant in crops:
+        longest = max(variant.size)
+        scale = min(3.0, 2048 / longest)
+        if scale != 1:
+            variant = variant.resize(
+                (max(1, round(variant.width * scale)), max(1, round(variant.height * scale))),
+                Image.Resampling.LANCZOS,
+            )
+        variant = ImageEnhance.Contrast(variant).enhance(1.12)
+        variant = ImageEnhance.Sharpness(variant).enhance(1.45)
+        variant = variant.filter(ImageFilter.UnsharpMask(radius=1.2, percent=125, threshold=2))
+        output = io.BytesIO()
+        variant.save(output, format="JPEG", quality=90, optimize=True)
+        data_url = "data:image/jpeg;base64," + base64.b64encode(output.getvalue()).decode("ascii")
+        encoded.append((label, data_url))
+    return encoded
 
 
 def _tier_from_record(record: object) -> PartnerTier | None:
@@ -928,6 +987,39 @@ class Tickets(commands.Cog):
                 "different ping is visible. Use review when the ping, sent state, or advertisement is unclear, "
                 "cropped, edited, or unreadable. Never infer missing text."
             )
+        prompt += (
+            " The supplied images are multiple enhanced views of the same screenshot: first the complete "
+            "Discord window, followed by overlapping zoomed sections. Judge them together. The full view "
+            "establishes that the advert is a sent Discord message; the zoomed sections are provided only "
+            "to make small text and mentions readable. A zoomed-out original is acceptable when the enhanced "
+            "views clearly prove the advert and ping requirement. Do not reject merely because one crop shows "
+            "only part of the advert."
+        )
+        image_content: list[dict[str, str]] = []
+        try:
+            raw_image = await attachment.read()
+            variants = await asyncio.to_thread(_partner_image_variants, raw_image)
+            for label, data_url in variants:
+                image_content.append(
+                    {"type": "input_text", "text": f"View: {label}."}
+                )
+                image_content.append(
+                    {"type": "input_image", "image_url": data_url, "detail": "high"}
+                )
+            log.info(
+                "Prepared %s enhanced view(s) for Auto Partner screenshot %s",
+                len(variants),
+                attachment.id,
+            )
+        except (discord.HTTPException, OSError, UnidentifiedImageError, ValueError) as error:
+            log.warning(
+                "Could not enhance Auto Partner screenshot %s; using original: %s",
+                attachment.id,
+                error,
+            )
+            image_content.append(
+                {"type": "input_image", "image_url": attachment.url, "detail": "high"}
+            )
         body = {
             "model": PARTNER_VISION_MODEL,
             "instructions": (
@@ -939,7 +1031,7 @@ class Tickets(commands.Cog):
                     "role": "user",
                     "content": [
                         {"type": "input_text", "text": prompt},
-                        {"type": "input_image", "image_url": attachment.url, "detail": "high"},
+                        *image_content,
                     ],
                 }
             ],
@@ -1818,4 +1910,3 @@ class Tickets(commands.Cog):
 
 async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(Tickets(bot))
-
