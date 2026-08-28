@@ -1,10 +1,10 @@
 [
   {
-    "min_members": 241,
+    "min_members": 31,
     "max_members": 280,
     "required_ping": "@everyone",
     "post_role": null,
-    "label": "241–280 members — they use @everyone; Density uses no ping"
+    "label": "31–280 members — they use @everyone; Density uses no ping"
   },
   {
     "min_members": 281,
