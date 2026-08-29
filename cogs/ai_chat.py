@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass, field
 
@@ -13,12 +14,39 @@ import aiohttp
 import discord
 from discord.ext import commands
 
+from cogs.tickets import is_ticket_close_request, ticket_owner_id
+
 
 log = logging.getLogger("starter-bot.ai-chat")
 
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 DEFAULT_MODEL = "gpt-5-mini"
 MAX_DISCORD_MESSAGE = 1900
+IP_CHANNEL_NAMES = {"ip", "serverip", "minecraftip", "mcip"}
+SERVER_IP_QUESTION_RE = re.compile(
+    r"(?:\bwhat(?:'s|\s+is)|\bwhats|\bwhere\s+is|\btell\s+me|\bgive\s+me|\bshow\s+me)"
+    r".{0,35}\b(?:minecraft\s+|mc\s+|server(?:'s)?\s+)?ip(?:\s+address)?\b|"
+    r"^\s*(?:the\s+)?(?:minecraft\s+|mc\s+|server(?:'s)?\s+)?ip(?:\s+address)?\s*(?:please)?[?!.]*\s*$",
+    re.IGNORECASE,
+)
+IPV4_RE = re.compile(
+    r"(?<![\w.])(?:25[0-5]|2[0-4]\d|1?\d?\d)"
+    r"(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}(?::\d{1,5})?(?![\w.])"
+)
+HOSTNAME_RE = re.compile(
+    r"(?<![\w.-])(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
+    r"[a-z]{2,63}(?::\d{1,5})?(?![\w.-])",
+    re.IGNORECASE,
+)
+IGNORED_HOSTS = (
+    "discord.com",
+    "discord.gg",
+    "youtube.com",
+    "youtu.be",
+    "tiktok.com",
+    "github.com",
+    "openai.com",
+)
 
 SYSTEM_INSTRUCTIONS = """You are Density Bot, the friendly AI helper for the Density SMP Discord server.
 Have natural, intelligent conversations in a warm, casual style. Keep most replies concise and easy to read in Discord.
@@ -113,6 +141,59 @@ class AIChat(commands.Cog):
     def _is_existing_mention_command(self, content: str) -> bool:
         first_word = content.split(maxsplit=1)[0].lstrip("!").lower() if content else ""
         return bool(first_word and self.bot.get_command(first_word))
+
+    @staticmethod
+    def _is_server_ip_question(content: str) -> bool:
+        if re.search(r"\b(?:my|your personal)\s+ip\b", content, re.IGNORECASE):
+            return False
+        return bool(SERVER_IP_QUESTION_RE.search(content))
+
+    @staticmethod
+    def _channel_key(name: str) -> str:
+        return re.sub(r"[^a-z0-9]", "", name.casefold())
+
+    def _find_ip_channel(self, guild: discord.Guild) -> discord.TextChannel | None:
+        channels = [
+            channel
+            for channel in guild.text_channels
+            if self._channel_key(channel.name) in IP_CHANNEL_NAMES
+        ]
+        return next(
+            (channel for channel in channels if self._channel_key(channel.name) == "ip"),
+            channels[0] if channels else None,
+        )
+
+    @staticmethod
+    def _message_search_text(message: discord.Message) -> str:
+        parts = [message.clean_content]
+        for embed in message.embeds:
+            if embed.title:
+                parts.append(embed.title)
+            if embed.description:
+                parts.append(embed.description)
+            for field in embed.fields:
+                parts.extend((field.name, field.value))
+        return "\n".join(part for part in parts if part)
+
+    async def _current_server_ip(
+        self,
+        guild: discord.Guild,
+    ) -> tuple[discord.TextChannel | None, str | None]:
+        channel = self._find_ip_channel(guild)
+        if channel is None:
+            return None, None
+        try:
+            async for item in channel.history(limit=50, oldest_first=False):
+                text = self._message_search_text(item)
+                candidates = [*IPV4_RE.findall(text), *HOSTNAME_RE.findall(text)]
+                for candidate in candidates:
+                    value = candidate.strip("`.,;()[]<>")
+                    hostname = value.rsplit(":", 1)[0].casefold()
+                    if not any(hostname == ignored or hostname.endswith(f".{ignored}") for ignored in IGNORED_HOSTS):
+                        return channel, value
+        except (discord.Forbidden, discord.HTTPException):
+            log.warning("Could not read the server IP from #%s in %s", channel.name, guild.name)
+        return channel, None
 
     @staticmethod
     def _extract_text(payload: dict) -> str:
@@ -215,6 +296,14 @@ class AIChat(commands.Cog):
         prompt = self._remove_bot_mentions(message.content, bot_user.id)
         if mentioned and self._is_existing_mention_command(prompt):
             return
+        if (
+            isinstance(message.channel, discord.TextChannel)
+            and ticket_owner_id(message.channel) is not None
+            and is_ticket_close_request(prompt)
+        ):
+            # The Tickets cog owns this action so the AI does not reply while the
+            # transcript is being saved and the channel is being deleted.
+            return
         if not prompt:
             await message.reply(
                 "Hey! What would you like to talk about?",
@@ -227,6 +316,27 @@ class AIChat(commands.Cog):
                 f"That message is a little too long. Please keep it under {self.max_input_chars:,} characters.",
                 mention_author=False,
             )
+            return
+        if self._is_server_ip_question(prompt):
+            ip_channel, server_ip = await self._current_server_ip(message.guild)
+            if server_ip:
+                await message.reply(
+                    f"The Minecraft server IP listed in {ip_channel.mention} is `{server_ip}`.",
+                    mention_author=False,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+            elif ip_channel:
+                await message.reply(
+                    f"I could not find a readable address in {ip_channel.mention}. Please check that channel or ask staff.",
+                    mention_author=False,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+            else:
+                await message.reply(
+                    "I could not find the server IP channel. Please ask a staff member.",
+                    mention_author=False,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
             return
         if not self.api_key:
             await message.reply(

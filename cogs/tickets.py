@@ -17,6 +17,7 @@ from PIL import Image, ImageEnhance, ImageFilter, ImageOps, UnidentifiedImageErr
 
 from cogs.permissions import (
     SeniorStaffOnly,
+    member_has_staff_role,
     member_is_staff,
     normalise_role_name,
     role_is_staff,
@@ -36,6 +37,15 @@ PARTNERSHIP_TICKET_CATEGORY_NAME = os.getenv(
     "Partnership Requests",
 )
 TICKET_STAFF_PING_ROLE = os.getenv("TICKET_STAFF_PING_ROLE", "Staff Team")
+TICKET_PATIENCE_MESSAGE = "Please be patient — staff will be with you shortly."
+CLOSE_TICKET_REQUEST_RE = re.compile(
+    r"^\s*(?:<@!?\d+>\s*)?(?:(?:please|pls|just)\s+)?"
+    r"(?:(?:can|could|would)\s+(?:you|someone|staff)\s+)?"
+    r"(?:(?:please|pls|just)\s+)?"
+    r"(?:close|delete)(?:\s+(?:it|this|ticket|the\s+ticket|this\s+ticket))?"
+    r"(?:\s+(?:please|pls))?[.!?]*\s*$",
+    re.IGNORECASE,
+)
 TICKET_TYPES = {
     "support": ("Support", "❓", "Tell us what you need help with and a staff member will reply."),
     "partnership": ("Partnerships", "🤝", "Tell us about your partnership proposal."),
@@ -221,6 +231,12 @@ def safe_channel_name(value: str) -> str:
 def ticket_owner_id(channel: discord.TextChannel) -> int | None:
     match = re.search(r"density-ticket-owner:(\d+)", channel.topic or "")
     return int(match.group(1)) if match else None
+
+
+def is_ticket_close_request(content: str) -> bool:
+    """Match only clear, standalone requests to close the current ticket."""
+
+    return bool(CLOSE_TICKET_REQUEST_RE.fullmatch(content))
 
 
 def ticket_type_id(channel: discord.TextChannel) -> str | None:
@@ -701,6 +717,7 @@ class Tickets(commands.Cog):
         self.partner_tiers = load_partner_tiers()
         self.openai_api_key = os.getenv("OPENAI_API_KEY", "").strip()
         self._partner_processing: set[int] = set()
+        self._closing_tickets: set[int] = set()
         bot.add_view(TicketPanelView(self))
         bot.add_view(CloseTicketView(self))
         bot.add_view(PartnerChoiceView(self))
@@ -807,7 +824,10 @@ class Tickets(commands.Cog):
             content=content,
             embed=discord.Embed(
                 title="🧑‍💼 Waiting for staff",
-                description="The applicant chose a normal staff review. A staff member will answer here.",
+                description=(
+                    f"**{TICKET_PATIENCE_MESSAGE}**\n\n"
+                    "The applicant chose a normal staff review."
+                ),
                 color=discord.Color.blurple(),
             ),
             allowed_mentions=discord.AllowedMentions(
@@ -1331,9 +1351,69 @@ class Tickets(commands.Cog):
             message.author.bot
             or message.guild is None
             or not isinstance(message.channel, discord.TextChannel)
-            or ticket_type_id(message.channel) != "partnership"
+        ):
+            return
+
+        owner_id = ticket_owner_id(message.channel)
+        if owner_id is not None and is_ticket_close_request(message.content):
+            member = message.author
+            can_close = member.id == owner_id or (
+                isinstance(member, discord.Member)
+                and (
+                    member.id == message.guild.owner_id
+                    or member.guild_permissions.administrator
+                    or member.guild_permissions.manage_channels
+                    or member_has_staff_role(member)
+                )
+            )
+            if not can_close:
+                await message.reply(
+                    "Only the ticket owner or a staff member can close this ticket.",
+                    mention_author=False,
+                )
+                return
+            if message.channel.id in self._closing_tickets:
+                await message.add_reaction("⏳")
+                return
+            ticket_type = ticket_type_id(message.channel)
+            if ticket_type not in TICKET_TYPES:
+                await message.reply(
+                    "I could not identify this ticket type, so I did not close it.",
+                    mention_author=False,
+                )
+                return
+            self._closing_tickets.add(message.channel.id)
+            try:
+                await message.channel.send("Closing this ticket now. I’m saving the transcript first…")
+                log_message = await self.file_ticket_log(
+                    message.channel,
+                    owner_id,
+                    message.author,
+                    ticket_type,
+                )
+                await message.channel.send(
+                    f"Transcript saved in {log_message.channel.mention}. Closing this ticket now."
+                )
+                await message.channel.delete(reason=f"Ticket closed by {message.author}")
+            except RuntimeError as error:
+                await message.reply(
+                    f"I did not close this ticket: {error}",
+                    mention_author=False,
+                )
+            except (discord.Forbidden, discord.HTTPException):
+                log.exception("Could not close ticket #%s from a message request", message.channel.name)
+                await message.reply(
+                    "I could not close this ticket. Please use the Close ticket button or ask staff.",
+                    mention_author=False,
+                )
+            finally:
+                self._closing_tickets.discard(message.channel.id)
+            return
+
+        if (
+            ticket_type_id(message.channel) != "partnership"
             or topic_marker(message.channel, "partner-mode") != "auto-pending"
-            or ticket_owner_id(message.channel) != message.author.id
+            or owner_id != message.author.id
         ):
             return
         images = [
@@ -1646,12 +1726,18 @@ class Tickets(commands.Cog):
             overwrites=overwrites,
             reason=f"{label} ticket opened by {interaction.user}",
         )
+        opening_description = (
+            f"Welcome {interaction.user.mention}! {instructions}\n\n"
+            "Please include all useful details, then choose how you would like to continue below."
+            if ticket_type == "partnership"
+            else (
+                f"Welcome {interaction.user.mention}! {instructions}\n\n"
+                f"Please include all useful details.\n\n**{TICKET_PATIENCE_MESSAGE}**"
+            )
+        )
         embed = discord.Embed(
             title=f"{emoji} {label} ticket",
-            description=(
-                f"Welcome {interaction.user.mention}! {instructions}\n\n"
-                "Please include all useful details. A staff member will be with you soon."
-            ),
+            description=opening_description,
             color=discord.Color.blurple(),
         )
         embed.set_footer(
@@ -1793,7 +1879,8 @@ class Tickets(commands.Cog):
                 f"**Minecraft IGN:** `{ign}`\n"
                 f"**Prize:** {prize}\n"
                 f"**Giveaway ID:** `{giveaway_id}`\n\n"
-                "Staff can arrange the prize here. Close the ticket when it has been delivered."
+                "Staff can arrange the prize here. Close the ticket when it has been delivered.\n\n"
+                f"**{TICKET_PATIENCE_MESSAGE}**"
             ),
             color=discord.Color.blurple(),
         )
