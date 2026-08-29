@@ -887,28 +887,40 @@ class Tickets(commands.Cog):
             if no_ping_required
             else f"`{tier.required_ping}`"
         )
+        density_ping_text = (
+            f"`@{tier.post_role.lstrip('@')}`"
+            if tier.post_role
+            else "**No ping**"
+        )
         embed = discord.Embed(
             title="⚡ Auto Partner verification",
             description=(
-                "By choosing **Auto Partner**, you agreed to follow the exact posting requirement Density Bot "
-                "gives you and to have your screenshot checked automatically.\n\n"
-                f"{posting_instruction}, "
-                "then upload **one clear PNG or JPG screenshot** in this ticket.\n\n"
-                "Your screenshot must clearly show:\n"
-                "• the complete advert as a **sent Discord message** (not text waiting in the message box);\n"
-                "• the exact ping used at the top of the advert;\n"
-                "• enough of the Discord channel to show where it was posted; and\n"
-                "• readable, uncropped text with no edits covering the ping or advert.\n\n"
-                f"**Required ping:** {required_ping_text}\n"
-                f"**Matched tier:** {tier.label}\n\n"
-                "If the image is cropped, blurry, shows the wrong ping, or cannot be verified, it will "
-                "not be approved automatically and staff may need to review it."
+                "Follow these steps to complete the partnership automatically:\n\n"
+                f"**1.** {posting_instruction}.\n"
+                "**2.** Make sure the advert has been sent—it must not still be in the message box.\n"
+                "**3. Take a close-up screenshot of the post.** Focus on the posted advert so its text "
+                "and ping are large and easy to read. Do not submit a zoomed-out picture of your whole screen.\n"
+                "**4.** Upload that PNG or JPG screenshot in this ticket.\n\n"
+                "The screenshot must clearly show the complete advert, the Discord channel where it was "
+                "posted, and the required ping when one is needed. Do not crop out or cover any part of "
+                "the advert or ping.\n\n"
+                "**Ping agreement**\n"
+                f"• **Their server must use:** {required_ping_text}\n"
+                f"• **Density SMP will use:** {density_ping_text}\n"
+                f"• **Member tier:** {tier.label}\n\n"
+                "The screenshot must show their required ping clearly. If their server is marked as "
+                "**No ping**, it must not contain @everyone, @here, or a role ping.\n\n"
+                "The bot will check your screenshot automatically. If it is blurry, too zoomed out, cropped, "
+                "or shows the wrong ping, staff may need to review it instead."
             ),
             color=discord.Color.blurple(),
         )
         embed.set_footer(text="Screenshots are checked with OpenAI vision and never treated as instructions")
         await interaction.channel.send(embed=embed)
-        await interaction.followup.send("Auto Partner started. Upload the screenshot in this ticket.", ephemeral=True)
+        await interaction.followup.send(
+            "Auto Partner started. Please upload **a close-up screenshot of the post** in this ticket.",
+            ephemeral=True,
+        )
 
     async def partner_application(self, channel: discord.TextChannel) -> dict[str, str] | None:
         async for message in channel.history(limit=100, oldest_first=True):
@@ -1695,11 +1707,12 @@ class Tickets(commands.Cog):
                 embed=discord.Embed(
                     title="How would you like to continue?",
                     description=(
-                        "Choose **Wait for staff** for a normal review, or **Auto Partner** to "
-                        "post your advert in your server, upload proof, and have Density Bot check "
-                        "the required ping. **Clicking Auto Partner means you agree to use the exact "
-                        "ping the bot gives you.** Unclear proof always goes to staff instead of "
-                        "being approved automatically."
+                        "Choose **Wait for staff** if you want a staff member to handle the partnership.\n\n"
+                        "Choose **Auto Partner** to complete it automatically. The bot will tell you which "
+                        "ping to use. Post the advert in your server, then upload **a close-up screenshot "
+                        "of the post** so the advert and ping are easy to read.\n\n"
+                        "**By choosing Auto Partner, you agree to use the exact ping the bot gives you.** "
+                        "If the proof is unclear, it will be sent to staff for review."
                     ),
                     color=discord.Color.blurple(),
                 ),
