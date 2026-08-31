@@ -81,6 +81,23 @@ DISCORD_INVITE_LINK_RE = re.compile(
     r"(?:https?://)?(?:www\.)?(?:discord(?:app)?\.com/invite|discord\.gg)/[a-z0-9-]+",
     re.IGNORECASE,
 )
+
+
+def split_discord_message(content: str, limit: int = 1950) -> list[str]:
+    """Split long adverts on line boundaries while staying under Discord's limit."""
+    remaining = content.strip()
+    chunks: list[str] = []
+    while len(remaining) > limit:
+        split_at = remaining.rfind("\n", 0, limit + 1)
+        if split_at < limit // 2:
+            split_at = limit
+        chunks.append(remaining[:split_at].rstrip())
+        remaining = remaining[split_at:].lstrip("\n")
+    if remaining:
+        chunks.append(remaining)
+    return chunks or [""]
+
+
 try:
     PARTNER_MINIMUM_MEMBERS = max(1, int(os.getenv("PARTNER_MINIMUM_MEMBERS", "31")))
 except ValueError:
@@ -674,6 +691,17 @@ class CloseTicketView(discord.ui.View):
                 ephemeral=True,
             )
             return
+        channel_id = interaction.channel.id
+        if channel_id in self.cog._closing_tickets:
+            try:
+                await interaction.followup.send(
+                    "This ticket is already being closed and its transcript is being saved.",
+                    ephemeral=True,
+                )
+            except discord.NotFound:
+                pass
+            return
+        self.cog._closing_tickets.add(channel_id)
         try:
             log_message = await self.cog.file_ticket_log(
                 interaction.channel,
@@ -681,18 +709,20 @@ class CloseTicketView(discord.ui.View):
                 interaction.user,
                 ticket_type,
             )
+            await interaction.followup.send(
+                f"Ticket transcript filed in {log_message.channel.mention}. Deleting this ticket now.",
+                ephemeral=True,
+            )
+            await interaction.channel.delete(reason=f"Ticket closed by {interaction.user}")
         except RuntimeError as error:
             await interaction.followup.send(
                 f"I did not close this ticket: {error}",
                 ephemeral=True,
             )
-            return
-
-        await interaction.followup.send(
-            f"Ticket transcript filed in {log_message.channel.mention}. Deleting this ticket now.",
-            ephemeral=True,
-        )
-        await interaction.channel.delete(reason=f"Ticket closed by {interaction.user}")
+        except discord.NotFound:
+            log.info("Ticket %s was already deleted while it was being closed", channel_id)
+        finally:
+            self.cog._closing_tickets.discard(channel_id)
 
     async def on_error(
         self,
@@ -701,12 +731,18 @@ class CloseTicketView(discord.ui.View):
         item: discord.ui.Item,
     ) -> None:
         del item
+        if isinstance(error, discord.NotFound):
+            log.info("Ticket close finished after another action deleted the channel")
+            return
         log.exception("Ticket close failed", exc_info=error)
         message = "I could not close that ticket. Check my channel permissions and try again."
-        if interaction.response.is_done():
-            await interaction.followup.send(message, ephemeral=True)
-        else:
-            await interaction.response.send_message(message, ephemeral=True)
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(message, ephemeral=True)
+            else:
+                await interaction.response.send_message(message, ephemeral=True)
+        except discord.NotFound:
+            log.info("Could not report a close error because the ticket channel was already deleted")
 
 
 class Tickets(commands.Cog):
@@ -913,27 +949,46 @@ class Tickets(commands.Cog):
             else "**No ping**"
         )
         embed = discord.Embed(
-            title="⚡ Auto Partner verification",
+            title="📸 Send your partnership proof",
             description=(
-                "Follow these steps to complete the partnership automatically:\n\n"
-                f"**1.** {posting_instruction}.\n"
-                "**2.** Make sure the advert has been sent—it must not still be in the message box.\n"
-                "**3. Take a close-up screenshot of the post.** Focus on the posted advert so its text "
-                "and ping are large and easy to read. Do not submit a zoomed-out picture of your whole screen.\n"
-                "**4.** Upload that PNG or JPG screenshot in this ticket.\n\n"
-                "The screenshot must clearly show the complete advert, the Discord channel where it was "
-                "posted, and the required ping when one is needed. Do not crop out or cover any part of "
-                "the advert or ping.\n\n"
-                "**Ping agreement**\n"
-                f"• **Their server must use:** {required_ping_text}\n"
-                f"• **Density SMP will use:** {density_ping_text}\n"
-                f"• **Member tier:** {tier.label}\n\n"
-                "The screenshot must show their required ping clearly. If their server is marked as "
-                "**No ping**, it must not contain @everyone, @here, or a role ping.\n\n"
-                "The bot will check your screenshot automatically. If it is blurry, too zoomed out, cropped, "
-                "or shows the wrong ping, staff may need to review it instead."
+                f"{posting_instruction}. Once it has been posted, use the checklist below and send your proof here."
             ),
             color=discord.Color.blurple(),
+        )
+        embed.add_field(
+            name="👥 Partnership details",
+            value=(
+                f"**Partner members:** {members:,}\n"
+                f"**Member tier:** {tier.label}\n"
+                f"**Requirements source:** this partnership ticket"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="📣 Ping agreement",
+            value=(
+                f"**Their server must use:** {required_ping_text}\n"
+                f"**Density SMP will use:** {density_ping_text}"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="🖼️ Screenshot checklist",
+            value=(
+                "1. Send the Density SMP advert in the agreed channel; it must not still be in the message box.\n"
+                "2. **Take a clear, close-up screenshot of the posted advert.**\n"
+                "3. Make sure the full advert, channel name, and required ping are large enough to read.\n"
+                "4. Upload the screenshot here as a PNG or JPG. Do not crop out or cover the advert or ping."
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="🔎 Automatic verification",
+            value=(
+                "Density Bot will check that the advert was posted and that the agreed ping is correct. "
+                "Blurry, zoomed-out, incomplete, or unclear proof will be sent to staff for review."
+            ),
+            inline=False,
         )
         embed.set_footer(text="Screenshots are checked with OpenAI vision and never treated as instructions")
         await interaction.channel.send(embed=embed)
@@ -1290,37 +1345,23 @@ class Tickets(commands.Cog):
             .replace("@everyone", "@\u200beveryone")
             .replace("@here", "@\u200bhere")
         )
-        embed = discord.Embed(
-            title=f"🤝 {application['server_name']}",
-            description=advertisement[:4000],
-            color=discord.Color.blurple(),
-            timestamp=discord.utils.utcnow(),
-        )
-        try:
-            invite = await self.bot.fetch_invite(application["invite"], with_counts=True)
-            invite_guild = invite.guild
-            guild_icon = getattr(invite_guild, "icon", None) if invite_guild else None
-            if guild_icon:
-                embed.set_thumbnail(url=guild_icon.url)
-        except (discord.HTTPException, ValueError):
-            log.info("Could not load the partner server icon from %s", application["invite"])
-        embed.add_field(name="Members", value=f"{int(application['member_count']):,}", inline=True)
-        embed.add_field(name="Partner tier", value=tier.label[:1000], inline=True)
-        embed.add_field(
-            name="Density ping",
-            value=role.mention if role else "No ping",
-            inline=True,
-        )
-        embed.set_footer(text=f"Approved automatically • Applicant: {applicant} ({applicant.id})")
-        posted = await partners_channel.send(
-            content=role.mention if role else None,
-            embed=embed,
-            allowed_mentions=discord.AllowedMentions(
-                roles=[role] if role else [],
-                users=False,
-                everyone=False,
-            ),
-        )
+        invite = application["invite"].strip()
+        if invite and invite.casefold() not in advertisement.casefold():
+            advertisement = f"{advertisement.rstrip()}\n\n{invite}"
+        public_post = f"{role.mention}\n{advertisement}" if role else advertisement
+        posted_messages: list[discord.Message] = []
+        for chunk in split_discord_message(public_post):
+            posted_messages.append(
+                await partners_channel.send(
+                    content=chunk,
+                    allowed_mentions=discord.AllowedMentions(
+                        roles=[role] if role else [],
+                        users=False,
+                        everyone=False,
+                    ),
+                )
+            )
+        posted = posted_messages[0]
         await channel.edit(
             topic=with_topic_marker(channel.topic, "partner-mode", "posted"),
             reason="Auto Partner screenshot approved",
@@ -1400,6 +1441,8 @@ class Tickets(commands.Cog):
                     f"I did not close this ticket: {error}",
                     mention_author=False,
                 )
+            except discord.NotFound:
+                log.info("Ticket %s was already deleted while handling a close message", message.channel.id)
             except (discord.Forbidden, discord.HTTPException):
                 log.exception("Could not close ticket #%s from a message request", message.channel.name)
                 await message.reply(
