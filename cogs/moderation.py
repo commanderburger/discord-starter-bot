@@ -167,6 +167,11 @@ class Moderation(commands.Cog):
     async def check_message(self, message: discord.Message) -> None:
         if not message.guild or message.author.bot or not message.content:
             return
+        if isinstance(message.author, discord.Member) and (
+            message.author.id == message.guild.owner_id
+            or any(normalise_channel_name(role.name) == "owner" for role in message.author.roles)
+        ):
+            return
         if (
             self.channel_is_exempt(message.channel)
             or self.channel_is_open_ticket(message.channel)
