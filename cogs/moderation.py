@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import re
+from collections import defaultdict, deque
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -10,7 +11,8 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from cogs.permissions import SeniorStaffOnly, StaffOnly, senior_only, staff_only
+from cogs.permissions import SeniorStaffOnly, StaffOnly, role_is_staff, senior_only, staff_only
+from cogs.content_filter import contains_discord_link, find_slur, redact_slurs
 
 
 log = logging.getLogger("starter-bot.moderation")
@@ -19,23 +21,14 @@ WARNINGS_FILE = DATA_DIR / "moderation.json"
 MAX_TIMEOUT = timedelta(days=28)
 MUTE_ROLE_NAME = os.getenv("MUTE_ROLE_NAME", "Muted")
 try:
-    DENSITY_GUILD_ID = int(os.getenv("DENSITY_GUILD_ID", "1525352205610127370"))
+    DENSITY_GUILD_ID = int(os.getenv("DENSITY_GUILD_ID", os.getenv("TEST_GUILD_ID", "1525352205610127370")))
 except ValueError:
     DENSITY_GUILD_ID = 1525352205610127370
-DISCORD_INVITE_RE = re.compile(
-    r"(?:https?://)?(?:www\.)?(?:discord(?:app)?\.com/invite|discord\.gg)/[a-z0-9-]+",
-    re.IGNORECASE,
-)
 DURATION_RE = re.compile(r"^(\d+)([smhdw])$", re.IGNORECASE)
 
 
 def normalise_channel_name(name: str) -> str:
     return re.sub(r"[^a-z0-9]", "", name.casefold())
-
-
-def topic_is_open_ticket(topic: str | None) -> bool:
-    value = topic or ""
-    return "density-ticket-owner:" in value and "density-ticket-open:true" in value
 
 
 def parse_duration(value: str) -> timedelta:
@@ -73,10 +66,10 @@ class Moderation(commands.Cog):
         self.bot = bot
         self.warning_lock = asyncio.Lock()
         self.mute_lock = asyncio.Lock()
-        configured = os.getenv("INVITE_EXEMPT_CHANNELS", "partners,announcements,our-ad,ad")
-        self.exempt_channels = {
-            normalise_channel_name(name) for name in configured.split(",") if name.strip()
-        }
+        self.mod_log_lock = asyncio.Lock()
+        self.message_times: dict[tuple[int, int], deque[float]] = defaultdict(deque)
+        self.repeated_messages: dict[tuple[int, int], deque[tuple[float, str]]] = defaultdict(deque)
+        self.spam_locks: dict[tuple[int, int], asyncio.Lock] = defaultdict(asyncio.Lock)
 
     @staticmethod
     def muted_role(guild: discord.Guild) -> discord.Role | None:
@@ -150,49 +143,88 @@ class Moderation(commands.Cog):
         except (discord.Forbidden, discord.HTTPException):
             log.warning("Could not apply permanent mute permissions to new channel %s", channel)
 
-    def channel_is_exempt(self, channel: discord.abc.GuildChannel | discord.Thread) -> bool:
-        names = {normalise_channel_name(channel.name)}
-        if isinstance(channel, discord.Thread) and channel.parent:
-            names.add(normalise_channel_name(channel.parent.name))
-        return bool(names & self.exempt_channels)
-
-    @staticmethod
-    def channel_is_open_ticket(channel: discord.abc.GuildChannel | discord.Thread) -> bool:
-        if isinstance(channel, discord.TextChannel):
-            return topic_is_open_ticket(channel.topic)
-        if isinstance(channel, discord.Thread) and isinstance(channel.parent, discord.TextChannel):
-            return topic_is_open_ticket(channel.parent.topic)
-        return False
-
     async def check_message(self, message: discord.Message) -> None:
         if not message.guild or message.author.bot or not message.content:
             return
-        if isinstance(message.author, discord.Member) and (
-            message.author.id == message.guild.owner_id
-            or any(normalise_channel_name(role.name) == "owner" for role in message.author.roles)
-        ):
+        member = message.author
+        if not isinstance(member, discord.Member):
             return
-        if (
-            self.channel_is_exempt(message.channel)
-            or self.channel_is_open_ticket(message.channel)
-            or not DISCORD_INVITE_RE.search(message.content)
-        ):
+        if find_slur(message.content):
+            await self.auto_moderate(message, "Prohibited slur", permanent=True)
             return
+        invite = contains_discord_link(message.content)
+        can_invite = member.id == message.guild.owner_id or any(
+            normalise_channel_name(role.name) in {"owner", "partnermanager"}
+            for role in member.roles
+        )
+        if invite and not can_invite:
+            await self.auto_moderate(message, "Discord invite link (Owner and Partner Manager only)")
+            return
+        await self.check_spam(message)
+
+    async def auto_moderate(self, message: discord.Message, rule: str, *, permanent: bool = False,
+                            spam: bool = False) -> None:
+        member = message.author
+        guild = message.guild
+        if not guild or not isinstance(member, discord.Member):
+            return
+        deleted = False
+        action = "Message removed"
         try:
             await message.delete()
-            await message.channel.send(
-                f"{message.author.mention}, Discord invite links are only allowed in tickets and the approved advert channels.",
-                delete_after=8,
-            )
-            await self.send_mod_log(
-                message.guild,
-                "Invite removed",
-                f"{message.author.mention} posted an invite in {message.channel.mention}.",
-            )
+            deleted = True
         except discord.Forbidden:
-            log.warning("Could not delete an invite in #%s: Manage Messages is missing", message.channel)
+            log.warning("Could not delete a moderated message in #%s: Manage Messages is missing", message.channel)
         except discord.HTTPException:
-            log.exception("Discord rejected an invite moderation action")
+            log.exception("Discord rejected a message deletion")
+        if permanent and member.id != guild.owner_id:
+            try:
+                role = await self.ensure_mute_role(guild)
+                await member.add_roles(role, reason=f"Automatic permanent mute: {rule}")
+                action = "Permanent mute applied"
+            except (discord.Forbidden, discord.HTTPException, RuntimeError):
+                action = "Permanent mute FAILED — staff action required"
+                log.exception("Automatic permanent mute failed in %s", guild.name)
+        elif spam and member.id != guild.owner_id:
+            try:
+                until = datetime.now(UTC) + timedelta(minutes=5)
+                await member.timeout(until, reason="Automatic 5-minute mute: message spam")
+                action = "5-minute timeout applied"
+            except (discord.Forbidden, discord.HTTPException):
+                action = "5-minute timeout FAILED — staff action required"
+                log.exception("Automatic spam timeout failed in %s", guild.name)
+        await self.send_mod_log(
+            guild, "Automatic moderation",
+            f"Rule: **{rule}**\nMember: {member.mention} (`{member.id}`)\n"
+            f"Channel: {message.channel.mention}\nMessage ID: `{message.id}`\n"
+            f"Deleted: **{'yes' if deleted else 'FAILED — staff action required'}**\n"
+            f"Action: **{action}**\nContent: {discord.utils.escape_mentions(redact_slurs(message.content))}",
+        )
+
+    async def check_spam(self, message: discord.Message) -> None:
+        member = message.author
+        guild = message.guild
+        if not guild or not isinstance(member, discord.Member) or member.id == guild.owner_id:
+            return
+        key = (guild.id, member.id)
+        async with self.spam_locks[key]:
+            now = datetime.now(UTC).timestamp()
+            times = self.message_times[key]
+            repeats = self.repeated_messages[key]
+            while times and now - times[0] > 10:
+                times.popleft()
+            while repeats and now - repeats[0][0] > 20:
+                repeats.popleft()
+            times.append(now)
+            compact = re.sub(r"\s+", " ", message.content.casefold().strip())
+            if compact:
+                repeats.append((now, compact))
+            repeated = compact and sum(text == compact for _, text in repeats) >= 3
+            if len(times) < 6 and not repeated:
+                return
+            times.clear()
+            repeats.clear()
+            await self.auto_moderate(message, "Repeated messages" if repeated else "Rapid-message spam", spam=True)
 
     async def send_mod_log(self, guild: discord.Guild, title: str, description: str) -> None:
         configured = os.getenv("MOD_LOG_CHANNEL", "").strip()
@@ -200,13 +232,48 @@ class Moderation(commands.Cog):
         if channel is None:
             channel = discord.utils.find(
                 lambda item: isinstance(item, discord.TextChannel)
-                and normalise_channel_name(item.name) in {"modlogs", "moderationlogs"},
+                and normalise_channel_name(item.name) in {"modlogs", "moderationlogs", "modlogsprivate"}
+                and not item.permissions_for(guild.default_role).view_channel,
                 guild.channels,
             )
+        elif isinstance(channel, discord.TextChannel) and channel.permissions_for(guild.default_role).view_channel:
+            log.error("Configured mod log channel is public in %s; using a private channel", guild.name)
+            channel = None
+        elif not isinstance(channel, discord.TextChannel):
+            channel = None
+        if channel is None:
+            async with self.mod_log_lock:
+                channel = discord.utils.find(
+                    lambda item: isinstance(item, discord.TextChannel)
+                    and normalise_channel_name(item.name) == "modlogsprivate"
+                    and not item.permissions_for(guild.default_role).view_channel,
+                    guild.channels,
+                )
+                if channel is None:
+                    bot_member = guild.me
+                    if bot_member is None:
+                        log.error("Cannot create mod-logs in %s: bot member unavailable", guild.name)
+                        return
+                    overwrites = {
+                        guild.default_role: discord.PermissionOverwrite(view_channel=False),
+                        bot_member: discord.PermissionOverwrite(view_channel=True, send_messages=True, embed_links=True),
+                    }
+                    overwrites.update({
+                        role: discord.PermissionOverwrite(view_channel=True)
+                        for role in guild.roles if role_is_staff(role) and not role.is_default()
+                    })
+                    try:
+                        channel = await guild.create_text_channel(
+                            "mod-logs-private", overwrites=overwrites, reason="Private automatic moderation reports"
+                        )
+                    except (discord.Forbidden, discord.HTTPException):
+                        log.exception("Could not create private mod-logs in %s", guild.name)
+                        return
         if isinstance(channel, discord.TextChannel):
             try:
                 await channel.send(
-                    embed=discord.Embed(title=title, description=description, color=discord.Color.orange())
+                    embed=discord.Embed(title=title, description=description, color=discord.Color.orange()),
+                    allowed_mentions=discord.AllowedMentions.none(),
                 )
             except discord.HTTPException:
                 log.warning("Could not send a moderation log message")
@@ -233,7 +300,17 @@ class Moderation(commands.Cog):
     @commands.Cog.listener()
     async def on_message_edit(self, before: discord.Message, after: discord.Message) -> None:
         if before.content != after.content:
-            await self.check_message(after)
+            # Edits must be filtered, but should not count as new messages for spam.
+            if after.guild and not after.author.bot and after.content:
+                member = after.author
+                if find_slur(after.content):
+                    await self.auto_moderate(after, "Prohibited slur", permanent=True)
+                elif isinstance(member, discord.Member) and contains_discord_link(after.content) and not (
+                    member.id == after.guild.owner_id or any(
+                        normalise_channel_name(role.name) in {"owner", "partnermanager"} for role in member.roles
+                    )
+                ):
+                    await self.auto_moderate(after, "Discord invite link (Owner and Partner Manager only)")
 
     @app_commands.command(name="ban", description="Ban a member from the server")
     @senior_only()

@@ -4,7 +4,8 @@ A modular Python Discord bot with moderation, Minecraft status, spawner economy 
 
 ## Included features
 
-- Removes Discord invite links outside `partners`, `announcements`, and `our-ad` (configurable).
+- Removes Discord links from messages by everyone except the server Owner and members with the Partner Manager or Owner role, including in tickets. Auto-moderation records deleted messages in a private mod log.
+- Detects rapid/repeated-message spam and applies a five-minute timeout; detected slurs are removed and receive a permanent Muted role. Detection uses a conservative reviewed list and optional additional terms, not a guarantee for every language or context.
 - `/stats` checks a Java or Bedrock Minecraft server directly. No API key is needed.
 - `/links` displays the server address and optional website/store/vote/Discord links.
 - `/ordering` lists live Density order prices and quantities after an API sync.
@@ -87,7 +88,6 @@ Recent SCALE releases use Docker for Apps. The bot needs a small private `/data`
    - `DISCORD_TOKEN` = the bot token
    - `MINECRAFT_SERVER` = the address players use, such as `play.example.net:25565`
    - `MINECRAFT_EDITION` = `java` or `bedrock`
-   - `INVITE_EXEMPT_CHANNELS` = `partners,announcements,our-ad`
    - `STAFF_ROLE_NAMES` = `Owner,Co Owner,Manager,Admin,Moderator,Staff,Support,Helper,Helpers,Partner Manager,Partner Managers`
    - `SENIOR_ROLE_NAMES` = `Owner,Co Owner,Manager`
    - `GIVEAWAY_PING_ROLE` = `giveaway ping`
@@ -102,6 +102,8 @@ Recent SCALE releases use Docker for Apps. The bot needs a small private `/data`
    - `BOT_UPDATES_CHANNEL` = `bot-updates`
    - `SOCIAL_LINKS_CHANNEL` = `links`
    - `BOT_SERVER_NAME` = the current Discord server name shown in panels and replies (for example `Orefront SMP`; defaults to `Density SMP`). Density's hard-coded social links are only posted when this is `Density SMP`.
+   - `AUTOMOD_SLUR_TERMS` = optional, comma-separated additional reviewed slurs for other languages. Automatic translation cannot safely identify every context or language; review false positives before adding terms.
+   - `MOD_LOG_CHANNEL` = optional private moderation-log channel ID. If absent, the bot finds a private `mod-logs` channel or creates a private `mod-logs-private` channel.
    - `STAFF_COMMANDS_CHANNEL` = `staff-commands`
    - `STAFF_ACTIVITY_CHANNEL` = `staff-activity`
    - `STAFF_PUNISHMENTS_CHANNEL` = `staff-punishments`

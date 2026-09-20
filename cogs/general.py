@@ -98,7 +98,7 @@ class General(commands.Cog):
             value="`/api status` · `/api test` · `/api set-url` · `/api set-key` · `/api sync`",
             inline=False,
         )
-        embed.set_footer(text="Discord invite links are removed outside approved advert channels.")
+        embed.set_footer(text="Discord invites: Owner and Partner Manager only. Spam and slurs are auto-moderated.")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
