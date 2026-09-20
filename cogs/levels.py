@@ -11,6 +11,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from cogs.permissions import normalise_role_name
+from cogs.welcome import SERVER_NAME
 
 
 log = logging.getLogger("starter-bot.levels")
@@ -226,7 +227,7 @@ class Levels(commands.Cog):
                 f"({int(record.get('xp', 0))} XP)"
             )
         embed = discord.Embed(
-            title="Density SMP Level Leaderboard",
+            title=f"{SERVER_NAME} Level Leaderboard",
             description="\n".join(lines) or "Nobody has earned chat XP yet.",
             color=discord.Color.gold(),
         )

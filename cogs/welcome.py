@@ -9,7 +9,7 @@ from cogs.permissions import normalise_role_name
 
 log = logging.getLogger("starter-bot.welcome")
 WELCOME_CHANNEL_NAMES = os.getenv("WELCOME_CHANNEL_NAMES", "welcome,welcom")
-SERVER_NAME = os.getenv("WELCOME_SERVER_NAME", "Density SMP")
+SERVER_NAME = os.getenv("BOT_SERVER_NAME", os.getenv("WELCOME_SERVER_NAME", "Density SMP"))
 
 
 def ordinal(value: int) -> str:

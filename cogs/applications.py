@@ -11,6 +11,7 @@ import discord
 from discord.ext import commands
 
 from cogs.permissions import member_is_senior, normalise_role_name, role_is_staff
+from cogs.welcome import SERVER_NAME
 
 
 log = logging.getLogger("starter-bot.applications")
@@ -24,7 +25,8 @@ PARTNER_MANAGER_ROLE_NAME = os.getenv("PARTNER_MANAGER_ROLE", "Partner Manager")
 HELPER_ROLE_NAME = os.getenv("HELPER_ROLE", "Helper")
 STAFF_TEAM_ROLE_NAME = os.getenv("STAFF_TEAM_ROLE", "Staff Team")
 HIGH_STAFF_CHANNEL_NAME = os.getenv("HIGH_STAFF_CHANNEL", "high-staff")
-PANEL_MARKER = "Density Staff Applications v2"
+PANEL_MARKER = f"{SERVER_NAME} Staff Applications v2"
+LEGACY_PANEL_MARKER = "Density Staff Applications v2"
 CONTROL_PANEL_MARKER = "Density Staff Application Controls v1"
 try:
     REAPPLY_DAYS = max(1, int(os.getenv("STAFF_APPLICATION_REAPPLY_DAYS", "14")))
@@ -36,7 +38,7 @@ PARTNER_MANAGER_QUESTIONS = (
     "What is your Minecraft IGN?",
     "How old are you?",
     "What is your timezone?",
-    "Why do you want to become a Partner Manager for Density SMP?",
+    f"Why do you want to become a Partner Manager for {SERVER_NAME}?",
     (
         "What partnership or staff experience do you have in other Discord servers? "
         "Describe your roles and attach permanent invite links to those servers."
@@ -44,7 +46,7 @@ PARTNER_MANAGER_QUESTIONS = (
     "How active can you be each day and each week?",
     "Can you complete at least five successful partnerships every week? Explain how you will meet this target.",
     "How would you find and approach a possible partner server?",
-    "Explain what you understand about Density SMP's partnership member and ping rules.",
+    f"Explain what you understand about {SERVER_NAME}'s partnership member and ping rules.",
     "What would you do if you were unsure whether a partnership should be accepted?",
     "Why should we choose you, and is there anything else we should know?",
 )
@@ -263,7 +265,7 @@ def application_text(record: dict) -> str:
     answers = record.get("answers", [])
     config = application_config(application_type(record))
     lines = [
-        f"Density SMP {config['name']} Application",
+        f"{SERVER_NAME} {config['name']} Application",
         f"Applicant: {record.get('applicant_name', 'Unknown')}",
         f"Discord user ID: {record.get('applicant_id', 'Unknown')}",
         f"Submitted: {record.get('submitted_at', 'Unknown')}",
@@ -519,7 +521,7 @@ class Applications(commands.Cog):
         partner_status = "🔴 Paused" if self.is_application_paused(guild_id, "partner_manager") else "🟢 Open"
         helper_status = "🔴 Paused" if self.is_application_paused(guild_id, "helper") else "🟢 Open"
         embed = discord.Embed(
-            title="📝 Density SMP Staff Applications",
+            title=f"📝 {SERVER_NAME} Staff Applications",
             description=(
                 "Choose the role you want to apply for below.\n\n"
                 f"**Partner Manager:** {partner_status}\n"
@@ -553,7 +555,7 @@ class Applications(commands.Cog):
 
         async for message in panel.history(limit=50):
             if message.author.id == self.bot.user.id and any(
-                embed.footer and embed.footer.text in {PANEL_MARKER, "Density Partner Manager Applications v1"}
+                embed.footer and embed.footer.text in {PANEL_MARKER, LEGACY_PANEL_MARKER, "Density Partner Manager Applications v1"}
                 for embed in message.embeds
             ):
                 guild_data["panel_message_id"] = message.id
@@ -689,7 +691,7 @@ class Applications(commands.Cog):
         # the introduction but prevented the question task from ever starting.
         await interaction.response.defer(ephemeral=True)
         if interaction.guild is None or not isinstance(interaction.user, discord.Member):
-            await interaction.followup.send("Use this button in the Density SMP server.", ephemeral=True)
+            await interaction.followup.send(f"Use this button in the {SERVER_NAME} server.", ephemeral=True)
             return
 
         guild_id = interaction.guild.id

@@ -8,6 +8,7 @@ import discord
 from discord.ext import commands
 
 from cogs.permissions import normalise_role_name
+from cogs.welcome import SERVER_NAME
 
 
 log = logging.getLogger("starter-bot.social-links")
@@ -63,6 +64,9 @@ class SocialLinks(commands.Cog):
             if self.checked:
                 return
             self.checked = True
+            # These are Density SMP's links, not generic links for every guild.
+            if SERVER_NAME != "Density SMP":
+                return
             posted = posted_guilds()
             for guild in self.bot.guilds:
                 post_key = f"{guild.id}:{POST_ID}"

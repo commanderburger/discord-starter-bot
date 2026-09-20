@@ -101,6 +101,7 @@ Recent SCALE releases use Docker for Apps. The bot needs a small private `/data`
    - `SPECIAL_RANKS_CHANNEL` = `special-ranks`
    - `BOT_UPDATES_CHANNEL` = `bot-updates`
    - `SOCIAL_LINKS_CHANNEL` = `links`
+   - `BOT_SERVER_NAME` = the current Discord server name shown in panels and replies (for example `Orefront SMP`; defaults to `Density SMP`). Density's hard-coded social links are only posted when this is `Density SMP`.
    - `STAFF_COMMANDS_CHANNEL` = `staff-commands`
    - `STAFF_ACTIVITY_CHANNEL` = `staff-activity`
    - `STAFF_PUNISHMENTS_CHANNEL` = `staff-punishments`

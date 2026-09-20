@@ -23,10 +23,12 @@ from cogs.permissions import (
     role_is_staff,
     senior_only,
 )
+from cogs.welcome import SERVER_NAME
 
 
 log = logging.getLogger("starter-bot.tickets")
-PANEL_MARKER = "Density SMP Tickets v1"
+PANEL_MARKER = f"{SERVER_NAME} Tickets v1"
+LEGACY_PANEL_MARKER = "Density SMP Tickets v1"
 TICKET_CHANNEL_NAMES = os.getenv("TICKET_CHANNEL_NAMES", "ticket,tickets")
 SUPPORT_TICKET_CATEGORY_NAME = os.getenv(
     "TICKET_SUPPORT_CATEGORY_NAME",
@@ -75,7 +77,7 @@ PARTNER_VISION_MODEL = os.getenv(
 PARTNER_VISION_TIMEOUT = 90
 PARTNER_APPROVAL_CONFIDENCE = 0.85
 PARTNER_LEARNING_CONFIDENCE = 0.75
-PARTNER_APPLICATION_FOOTER = "Density SMP Partner Application"
+PARTNER_APPLICATION_FOOTER = f"{SERVER_NAME} Partner Application"
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 DISCORD_INVITE_LINK_RE = re.compile(
     r"(?:https?://)?(?:www\.)?(?:discord(?:app)?\.com/invite|discord\.gg)/[a-z0-9-]+",
@@ -353,7 +355,7 @@ class TicketTypeSelect(discord.ui.Select):
             discord.SelectOption(
                 label="Support",
                 value="support",
-                description="Get help from the Density SMP staff team",
+                description=f"Get help from the {SERVER_NAME} staff team",
                 emoji="❓",
             ),
             discord.SelectOption(
@@ -497,7 +499,7 @@ class PartnerApplicationModal(discord.ui.Modal):
             return
         if members < PARTNER_MINIMUM_MEMBERS:
             await interaction.response.send_message(
-                f"Density SMP does not offer partnerships to servers below "
+                f"{SERVER_NAME} does not offer partnerships to servers below "
                 f"{PARTNER_MINIMUM_MEMBERS} members.",
                 ephemeral=True,
             )
@@ -934,9 +936,9 @@ class Tickets(commands.Cog):
         )
         no_ping_required = tier.required_ping.casefold().strip() in {"no ping", "none"}
         posting_instruction = (
-            "Post the **Density SMP advertisement** in your server with **no ping at all**"
+            f"Post the **{SERVER_NAME} advertisement** in your server with **no ping at all**"
             if no_ping_required
-            else "Post the **Density SMP advertisement** in your server using the required ping below"
+            else f"Post the **{SERVER_NAME} advertisement** in your server using the required ping below"
         )
         required_ping_text = (
             "**No ping** — do not include @everyone, @here, or a role mention"
@@ -968,14 +970,14 @@ class Tickets(commands.Cog):
             name="📣 Ping agreement",
             value=(
                 f"**Their server must use:** {required_ping_text}\n"
-                f"**Density SMP will use:** {density_ping_text}"
+                f"**{SERVER_NAME} will use:** {density_ping_text}"
             ),
             inline=False,
         )
         embed.add_field(
             name="🖼️ Screenshot checklist",
             value=(
-                "1. Send the Density SMP advert in the agreed channel; it must not still be in the message box.\n"
+                f"1. Send the {SERVER_NAME} advert in the agreed channel; it must not still be in the message box.\n"
                 "2. **Take a clear, close-up screenshot of the posted advert.**\n"
                 "3. Make sure the full advert, channel name, and required ping are large enough to read.\n"
                 "4. Upload the screenshot here as a PNG or JPG. Do not crop out or cover the advert or ping."
@@ -1548,7 +1550,7 @@ class Tickets(commands.Cog):
         owner = channel.guild.get_member(owner_id)
         owner_text = f"{owner} ({owner_id})" if owner else str(owner_id)
         lines = [
-            "DENSITY SMP TICKET TRANSCRIPT",
+            f"{SERVER_NAME.upper()} TICKET TRANSCRIPT",
             f"Ticket: #{channel.name} ({channel.id})",
             f"Type: {label}",
             f"Opened by: {owner_text}",
@@ -1681,7 +1683,7 @@ class Tickets(commands.Cog):
             or not isinstance(interaction.user, discord.Member)
             or ticket_type not in TICKET_TYPES
         ):
-            await interaction.response.send_message("Tickets can only be opened in Density SMP.", ephemeral=True)
+            await interaction.response.send_message(f"Tickets can only be opened in {SERVER_NAME}.", ephemeral=True)
             return
 
         existing = discord.utils.find(
@@ -1787,7 +1789,7 @@ class Tickets(commands.Cog):
             text=(
                 PARTNER_APPLICATION_FOOTER
                 if ticket_type == "partnership"
-                else "Density SMP Tickets"
+                else f"{SERVER_NAME} Tickets"
             )
         )
         if ticket_type == "bug" and answers:
@@ -1946,7 +1948,7 @@ class Tickets(commands.Cog):
             title="Tickets",
             description=(
                 "Choose the option below that best matches what you need.\n\n"
-                "❓ **Support** — Help with Density SMP\n"
+                f"❓ **Support** — Help with {SERVER_NAME}\n"
                 "🤝 **Partnerships** — Partnership enquiries\n"
                 "🛠️ **Bug Report** — Report a problem\n"
                 "🎉 **Giveaway** — Get help with a giveaway"
@@ -1971,7 +1973,7 @@ class Tickets(commands.Cog):
                     async for message in channel.history(limit=50):
                         if message.author.id != self.bot.user.id:
                             continue
-                        if any(embed.footer and embed.footer.text == PANEL_MARKER for embed in message.embeds):
+                        if any(embed.footer and embed.footer.text in {PANEL_MARKER, LEGACY_PANEL_MARKER} for embed in message.embeds):
                             await message.edit(
                                 embed=self.panel_embed(),
                                 view=TicketPanelView(self),
@@ -2023,7 +2025,7 @@ class Tickets(commands.Cog):
             self.panel_checked = False
             log.exception("Could not set up the ticket panel")
 
-    @app_commands.command(name="ticketsetup", description="Post the Density SMP ticket panel here")
+    @app_commands.command(name="ticketsetup", description="Post the server ticket panel here")
     @senior_only()
     async def ticketsetup(self, interaction: discord.Interaction) -> None:
         if not isinstance(interaction.channel, discord.TextChannel):

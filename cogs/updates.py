@@ -8,6 +8,7 @@ import discord
 from discord.ext import commands
 
 from cogs.permissions import normalise_role_name
+from cogs.welcome import SERVER_NAME
 
 
 log = logging.getLogger("starter-bot.updates")
@@ -134,17 +135,17 @@ class Updates(commands.Cog):
                 message = await channel.fetch_message(message_id)
             except (discord.NotFound, discord.Forbidden, discord.HTTPException):
                 message = None
+        embed = discord.Embed(
+            title=UPDATE_PING_PANEL_TITLE,
+            description=(
+                f"React with {UPDATE_PING_EMOJI} to receive the {role.mention} role and be notified "
+                "when important server or bot updates are posted.\n\n"
+                "Remove your reaction whenever you want to remove the role."
+            ),
+            color=discord.Color.blurple(),
+        )
+        embed.set_footer(text=f"{SERVER_NAME} • Optional update notifications")
         if message is None:
-            embed = discord.Embed(
-                title=UPDATE_PING_PANEL_TITLE,
-                description=(
-                    f"React with {UPDATE_PING_EMOJI} to receive the {role.mention} role and be notified "
-                    "when important server or bot updates are posted.\n\n"
-                    "Remove your reaction whenever you want to remove the role."
-                ),
-                color=discord.Color.blurple(),
-            )
-            embed.set_footer(text="Density SMP • Optional update notifications")
             try:
                 message = await channel.send(
                     embed=embed,
@@ -157,6 +158,11 @@ class Updates(commands.Cog):
                 log.exception("Could not post the update-role panel in #%s", channel.name)
                 return
             self.update_ping_messages[guild.id] = message.id
+        elif message.author.id == self.bot.user.id:
+            try:
+                await message.edit(embed=embed)
+            except discord.HTTPException:
+                log.exception("Could not refresh the update-role panel in #%s", channel.name)
         try:
             await message.add_reaction(UPDATE_PING_EMOJI)
         except discord.HTTPException:
@@ -211,6 +217,18 @@ class Updates(commands.Cog):
                 role = await self.ensure_update_ping_role(guild)
                 if channel is not None and role is not None:
                     await self.ensure_update_ping_panel(guild, channel, role)
+                if channel is not None and SERVER_NAME != "Density SMP":
+                    try:
+                        async for message in channel.history(limit=50):
+                            if message.author.id != self.bot.user.id or not message.embeds:
+                                continue
+                            original = message.embeds[0]
+                            if original.title == "Density Bot Update" and original.footer.text == "Density SMP • Bot update":
+                                replacement = original.copy()
+                                replacement.set_footer(text=f"{SERVER_NAME} • Bot update")
+                                await message.edit(embed=replacement)
+                    except discord.HTTPException:
+                        log.exception("Could not refresh previous release notes in #%s", channel.name)
                 release_key = f"{guild.id}:{RELEASE_ID}"
                 if channel is None or release_key in announced:
                     continue
@@ -226,7 +244,7 @@ class Updates(commands.Cog):
                     color=discord.Color.blurple(),
                     timestamp=discord.utils.utcnow(),
                 )
-                embed.set_footer(text="Density SMP • Bot update")
+                embed.set_footer(text=f"{SERVER_NAME} • Bot update")
                 try:
                     await channel.send(
                         embed=embed,
